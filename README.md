@@ -82,4 +82,5 @@ bash ~/start.sh
 ## 更多文档
 
 - **纯手动复刻指南**（不依赖本仓库脚本，仅用 DepotDownloader + Source2Viewer-CLI 从 depot 手动拼装，Linux）: [`core/CS2_SLIM_GUIDE.md`](core/CS2_SLIM_GUIDE.md)
+- **精简树结构全解析**（目录结构图、制作工具、精简原理与必须项）: [`core/CS2_SLIM_TREE_GUIDE.md`](core/CS2_SLIM_TREE_GUIDE.md)
 - **开发 / CLI / 架构文档**（CLI 子命令、配置驱动、仓库结构、实测记录）: [`DEVELOP.md`](DEVELOP.md)
