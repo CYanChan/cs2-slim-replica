@@ -1,215 +1,168 @@
-# CS2 精简服务端地图组件复刻指南
+# CS2 精简服务端 · 地图复刻指南（手动添加竞技地图）
 
-> 本文档讲解 CS2 精简服务端「地图组件」的结构、来源与三种获取方式，属于 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目文档。
-> 配套阅读：[《纯手动复刻指南》](CS2_SLIM_GUIDE.md)（服务端本体构建）、[《精简树全解析》](CS2_SLIM_TREE_GUIDE.md)（目录结构）。
-
----
-
-## 一、为什么地图要单独成组件
-
-- 精简树核心包只内置一张默认竞技地图 **de_dust2**（约 250MB），其余 8 张官方竞技地图以「**地图组件**」形式按需添加。
-- CS2 的每张地图是一个独立的 **`game/csgo/maps/de_xxx.vpk`**（约 150~430MB），内部包含该地图的完整内容：世界几何、材质、粒子、导航网格（nav）、人机（bots）数据等，**不需要额外的 loose 文件**。
-- 地图的 `maps/prefabs/`（预置实体）已包含在核心下载清单中，选配地图只需下载地图 VPK 本身。
-- 地图 VPK 不属于 `pak01_*.vpk` 编号体系，引擎按地图路径直接加载，因此可以独立下载/分发，不影响「精简树无编号包」的原则。
-
-当前 9 张竞技地图及体积：
-
-| 地图 | VPK 大小（约） | 预构建 zip 大小（约） | 默认 |
-|------|------------|----------------|------|
-| de_dust2 | 250 MB | 核心包内置 | ✅ 必须 |
-| de_mirage | 168 MB | 155 MB | 选配 |
-| de_inferno | 432 MB | 398 MB | 选配 |
-| de_ancient | 387 MB | 364 MB | 选配 |
-| de_anubis | 257 MB | 236 MB | 选配 |
-| de_cache | 295 MB | 271 MB | 选配 |
-| de_nuke | 236 MB | 212 MB | 选配 |
-| de_overpass | 312 MB | 288 MB | 选配 |
-| de_train | 364 MB | 328 MB | 选配 |
-| de_vertigo | 182 MB | 165 MB | 选配 |
+> 本文档属于 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目文档，与 [《纯手动复刻指南》](CS2_SLIM_GUIDE.md)、[《精简树全解析》](CS2_SLIM_TREE_GUIDE.md) 配套阅读。
+>
+> 用 DepotDownloader + Source2Viewer-CLI，手动为精简服务端添加任意竞技地图。不依赖任何现成脚本/仓库。
+> 原理：CS2 地图是独立的 VPK 文件，存放在 Steam depot 2347770 的 `game/csgo/maps/` 下，只需把地图 VPK 和对应 prefabs（天空盒）下载放入精简树即可。
 
 ---
 
-## 二、地图组件结构
+## 一、原理：CS2 地图在 Steam 里是怎么存的
 
-### 2.1 注册表 registry/maps.json（单一事实源）
-
-主仓库 [`registry/maps.json`](../registry/maps.json) 是地图组件的注册表，字段含义：
-
-| 字段 | 含义 |
-|------|------|
-| `required` | `true` = 核心地图，始终加载（当前仅 de_dust2） |
-| `filelist` | 追加到核心下载清单的路径片段（= 地图 VPK 精确路径） |
-| `prebuilt_url` | 预构建 zip 地址（GitHub Release，可为空） |
-
-示例（de_mirage）：
-
-```json
-"de_mirage": {
-  "required": false,
-  "name": "Mirage",
-  "filelist": ["game/csgo/maps/de_mirage.vpk"],
-  "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_mirage.zip"
-}
-```
-
-### 2.2 地图组件仓库 cs2-slim-maps
-
-每个地图一个目录：
+通过拉取 depot 2347770 的 manifest 可以看到，每张竞技地图由两部分组成：
 
 ```text
-cs2-slim-maps/
-├── de_mirage/
-│   ├── filelist.txt     # 追加到 filelist_2347770.txt 的下载片段（一行路径）
-│   └── metadata.json    # 元数据（depot、大小、更新时间）
-├── de_inferno/
-│   └── ...
-└── build_map_zips.py    # 把 depot 中的地图 VPK 打包成预构建 zip
+game/csgo/maps/de_mirage.vpk                        ← 地图本体（实体/几何/导航/灯光）
+game/csgo/maps/prefabs/de_mirage/3dskybox_mirage.vpk ← 天空盒/3D 远景（prefabs）
+game/csgo/maps/de_mirage_vanity.vpk                  ← 客户端装饰（服务器不需要）
 ```
 
-`metadata.json` 示例：
+要点：
 
-```json
-{
-  "name": "Mirage",
-  "updated": "2026-10-06",
-  "size_mb": 250,
-  "required": false,
-  "filelist": ["game/csgo/maps/de_mirage.vpk"],
-  "depot": 2347770
-}
-```
+- **地图本体**是单个 VPK（不是 multi-chunk），文件名 `de_<图名>.vpk`
+- 每张地图在 `maps/prefabs/<图名>/` 下有自己的天空盒 VPK（`*_skybox.vpk`、`3dskybox*.vpk` 等）
+- `_vanity.vpk` 是给客户端看的装饰内容（涂鸦/花哨），**服务器不需要，不要下载**
+- 服务器加载地图时按 `maps/<图名>.vpk` 读取，并从 `maps/prefabs/<图名>/` 加载天空盒
 
-### 2.3 两种分发形态
+### 竞技地图真实大小（2026-10-08 manifest）
 
-```mermaid
-graph LR
-    A["地图组件"] --> B["filelist 片段<br/>(source 模式)"]
-    A --> C["预构建 zip<br/>(prebuilt 模式)"]
-    B --> D["合并进核心下载清单<br/>随 depot 一次性下载"]
-    C --> E["解压到精简树根目录<br/>zip 内含 game/csgo/maps/ 前缀"]
-```
+| 地图 | 地图 VPK | 主要 prefabs |
+|------|---------|-------------|
+| de_dust2 | 262 MB | `de_dust2_skybox.vpk`（4.8 MB） |
+| de_mirage | 176 MB | `3dskybox_mirage.vpk`（4.9 MB） |
+| de_inferno | 453 MB | `de_inferno_skybox.vpk`（2.5 MB）+ 多个 3d 天空盒 |
+| de_ancient | 405 MB | `de_ancient_skybox.vpk`（52 MB） |
+| de_anubis | 270 MB | `de_anubis_skybox.vpk`（2.6 MB） |
+| de_cache | 309 MB | `de_cache_sky.vpk`（22.6 MB） |
+| de_nuke | 247 MB | `de_nuke_skybox02.vpk`（4.7 MB） |
+| de_overpass | 327 MB | 对应 prefabs 目录 |
+| de_train | 382 MB | `3dskybox.vpk`（2.1 MB）+ `de_train_skybox.vpk`（5.8 MB） |
+| de_vertigo | 191 MB | 对应 prefabs 目录 |
 
-| 形态 | 内容 | 用途 |
+> 体积会随 CS2 更新略有浮动；精确大小以 SteamDB 或 manifest 为准。
+
+---
+
+## 二、工具准备
+
+| 工具 | 用途 | 获取 |
 |------|------|------|
-| filelist 片段 | `game/csgo/maps/de_xxx.vpk` 一行文本 | source 模式，随核心 depot 一起下载 |
-| 预构建 zip | 含 `game/csgo/maps/de_xxx.vpk` | prebuilt 模式，直接解压到精简树根目录 |
+| DepotDownloader | 从 Steam depot 下载地图 VPK | https://github.com/SteamRE/DepotDownloader |
+| Source2Viewer-CLI | 验证地图 VPK 内容完整性 | https://s2v.app |
 
 ---
 
-## 三、地图来源与原理
+## 三、第一步：下载地图 VPK
 
-- 地图 VPK 位于 **depot 2347770**（共享内容）的 `game/csgo/maps/` 目录，与核心资产同库。
-- 加载优先级：地图 VPK 属于 `game VPK` 层级，但**不经过 `pak01_dir.vpk` 索引**，引擎按 `+map de_xxx` 直接读取 `maps/de_xxx.vpk`。
-- 因此精简树移走全部 `pak01_*.vpk` 后，保留 `maps/de_dust2.vpk` 依然可以正常加载地图。
+### 3.1 写 filelist
 
----
-
-## 四、获取地图组件的三种方式
-
-### 方式 A：source 模式（随核心一起构建，推荐）
-
-在 `slim.yaml` 或命令行指定 `CS2_MAPS`：
-
-```yaml
-platform: linux
-maps:
-  - de_dust2
-  - de_mirage
-  - de_inferno
-features: []
-```
-
-```bash
-python cs2slim.py download --config slim.yaml   # 核心 + 地图 VPK 一起下载
-python cs2slim.py extract  --config slim.yaml
-python cs2slim.py build    --config slim.yaml   # 地图 VPK 落到 game/csgo/maps/
-```
-
-`cs2slim.py` 会把 `maps.json` 中对应地图的 `filelist` 合并进核心下载清单，**一次性下载**，无需单独处理地图。
-
-### 方式 B：prebuilt 模式（已有预构建包，最快）
-
-```bash
-# 一键脚本（Linux，先 export 再 curl|bash）
-export CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-
-# CLI 等价
-python cs2slim.py prebuilt --config slim.yaml
-```
-
-`cs2slim.py` 会从 `releases/latest/download/de_mirage.zip` 下载并解压到精简树根目录。
-
-也可以手动拼装（适合已有精简树）：
-
-```bash
-curl -fsSL -o de_mirage.zip https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_mirage.zip
-unzip -o de_mirage.zip -d <精简树根目录>     # zip 内已含 game/csgo/maps/ 前缀
-```
-
-### 方式 C：纯手动复刻（制作预构建包）
-
-当需要为某张地图制作预构建包（或验证原理）时：
-
-**1. 用 DepotDownloader 精确下载地图 VPK**（filelist 只含一行）：
+DepotDownloader 的 `-filelist` 每行一个精确路径。以添加 `de_mirage` 为例，创建 `maps.txt`：
 
 ```text
-game/csgo/maps/de_ancient.vpk
+game/csgo/maps/de_mirage.vpk
+game/csgo/maps/prefabs/de_mirage/3dskybox_mirage.vpk
 ```
+
+> 如何知道某张地图的 prefabs 具体文件名？
+> 先拉 manifest 再 grep，最准确：
+> ```bash
+> ./DepotDownloader -app 730 -depot 2347770 -manifest-only -dir manifests
+> grep "maps/prefabs/de_mirage/" manifests/manifest_*.txt | awk '{print $NF}'
+> ```
+> 或者去 SteamDB https://steamdb.info/app/730/depots/ 看 depot 2347770 的文件列表。
+
+### 3.2 下载
 
 ```bash
-./DepotDownloader -app 730 -depot 2347770 \
-  -filelist map_ancient.txt -dir cs2_depot -os linux -osarch 64
+./DepotDownloader -app 730 -depot 2347770 -filelist maps.txt -dir cs2_depot -os linux -osarch 64
 ```
 
-**2. 打包成预构建 zip**（路径前缀 `game/csgo/maps/`）：
+下载完成后文件在 `cs2_depot/game/csgo/maps/` 下（含 prefabs 子目录）。
+
+> 同时下载多张地图：把多行路径写进同一个 `maps.txt` 即可，一次跑完。
+
+---
+
+## 四、第二步：放入精简树
+
+假设精简树在 `~/cs2-slim-build/slim`（或你手动组装的 `slim/`）：
 
 ```bash
-python build_map_zips.py <depot>/game/csgo/maps <output_dir> de_ancient
+cd cs2_depot/game/csgo
+
+# 1) 地图本体 VPK
+cp maps/de_mirage.vpk ~/cs2-slim-build/slim/game/csgo/maps/
+
+# 2) 对应 prefabs（天空盒）——必须！
+mkdir -p ~/cs2-slim-build/slim/game/csgo/maps/prefabs/de_mirage
+cp -r maps/prefabs/de_mirage/* ~/cs2-slim-build/slim/game/csgo/maps/prefabs/de_mirage/
 ```
 
-产物：`de_ancient.zip`，内含 `game/csgo/maps/de_ancient.vpk`。
-
-**3. 发布与注册**：
-- 上传 zip 到 `cs2-slim-maps` Release（`gh release upload v1.0.0 de_ancient.zip --clobber`）
-- 在 `registry/maps.json` 为该地图填写 `prebuilt_url`
-- 更新 `de_ancient/metadata.json` 的 `updated` 日期
+> 精简树里已自带 `de_dust2.vpk` 和 `maps/prefabs/de_dust2/`，新地图按同样结构追加即可。
+> 本仓库核心包的核心清单已包含**全部竞技地图的 prefabs**（见 `core/filelists/filelist_2347770.txt`），因此使用本仓库构建的精简树通常已自带 `maps/prefabs/<图名>/`，此步可跳过或用于覆盖更新。
 
 ---
 
-## 五、注册表与 CLI 校验行为
+## 五、第三步：配置与启动
 
-`cs2slim.py` 对地图组件有严格校验，避免「选了等于白选」：
+### 5.1 直接指定地图启动
 
-| 场景 | 行为 |
-|------|------|
-| 未知地图组件 | `错误: 未知地图组件 de_xxx，请检查 registry/maps.json`（报错退出） |
-| prebuilt 模式选中无 `prebuilt_url` 的地图 | 报错退出，提示改用 source 模式 |
-| `CS2_MAPS` 未包含 de_dust2 | `resolve_maps()` 自动在开头插入 de_dust2（核心地图兜底） |
-| de_dust2 在 prebuilt 模式 | 核心包内置，不额外下载 |
+```bash
+cd ~/cs2-slim-build/slim
+./game/bin/linuxsteamrt64/cs2 \
+  -dedicated +map de_mirage +hostname "Slim Mirage" \
+  -maxplayers 12 -ip 0.0.0.0 -port 27015 \
+  -insecure -condebug +game_type 0 +game_mode 0 \
+  +sv_pure 0 +sv_cheats 1
+```
 
-> 当前 9 张竞技地图均已有预构建包，prebuilt 模式可全部选择。
+### 5.2 配置地图循环（mapcycle）
+
+CS2 服务器首次启动会在 `game/csgo/cfg/` 自动生成 `mapcycle.txt`。手动编辑：
+
+```text
+de_dust2
+de_mirage
+de_inferno
+```
+
+然后在启动参数加 `+mapgroupname mg_active`（竞技图组）或用 `sm_nextmap` 之类的插件管理。最简方式：启动后控制台输入 `changelevel de_mirage` 即可切换。
 
 ---
 
-## 六、踩坑与注意事项
+## 六、验证地图 VPK 完整性
 
-1. **prefabs 不能丢**：`maps/prefabs/` 由核心清单提供，若精简树缺少该目录，地图 Spawn 后会回退 Idle（看起来像秒退）。
-2. **zip 解压位置**：预构建 zip 内含 `game/csgo/maps/` 前缀，必须解压到精简树**根目录**（不是 `game/csgo/` 内）。
-3. **地图是 VPK 不是散文件**：不要把地图 VPK 解压成 loose files；`csgo/` 下保留 `pak01_*.vpk` 会破坏精简树。
-4. **注册表一致性**：`maps.json` 与 `cs2-slim-maps` 仓库的 `metadata.json` 应保持同步；修改后运行 `python generate_data.py`（生成器数据源）。
-5. **版本字段**：`maps.json` 的 `version` 与各地图 `metadata.json` 的 `updated` 记录更新时间，便于追溯。
-6. **编码**：`maps.json` 为 UTF-8 编码 JSON，`build_combined_filelist` 读取时使用 `utf-8-sig` 兼容 BOM。
+用 Source2Viewer-CLI 检查地图 VPK 内容是否正常：
+
+```bash
+# 列出地图 VPK 内的关键资源
+./Source2Viewer-CLI -i de_mirage.vpk --vpk_list | head -40
+# 应看到 world/ entities/ 等条目
+./Source2Viewer-CLI -i de_mirage.vpk --vpk_list | grep -E "world|entities|spawn"
+```
+
+确认地图能被解析、条目完整，再放进精简树启动。
 
 ---
 
-## 七、参考链接
+## 七、踩坑清单
+
+| 坑 | 现象 | 解决 |
+|----|------|------|
+| 只下地图 VPK，没下 prefabs | 地图加载后天空盒缺失/黑背景，或加载异常 | 补下 `maps/prefabs/<图名>/` 下所有 VPK |
+| 下载了 `_vanity.vpk` | 白白多下几 MB~几十 MB，服务器用不到 | 忽略所有 `*_vanity.vpk` |
+| 路径写错 | DepotDownloader 报 `No files matched` | 用 manifest grep 确认精确路径 |
+| 地图名带 `.vpk` 启动 | 服务器找不到地图 | 启动参数用 `+map de_mirage`（不带后缀） |
+| `-insecure` 缺失 | 精简树校验失败/连不上 | 保持 `-insecure` 启动 |
+| 想确认地图 VPK 是否损坏 | 启动时报地图读取错误 | 用 Source2Viewer-CLI `--vpk_verify` 校验 |
+
+---
+
+## 八、参考
 
 | 资源 | 链接 |
 |------|------|
-| 地图组件仓库 | https://github.com/cyqmq/cs2-slim-maps |
-| 地图注册表 | [`registry/maps.json`](../registry/maps.json) |
-| 地图打包脚本 | [`cs2-slim-maps/build_map_zips.py`](https://github.com/cyqmq/cs2-slim-maps/blob/main/build_map_zips.py) |
-| CS2 SteamDB depots（2347770） | https://steamdb.info/app/730/depots/ |
-| 纯手动复刻指南 | [`CS2_SLIM_GUIDE.md`](CS2_SLIM_GUIDE.md) |
-| 精简树全解析 | [`CS2_SLIM_TREE_GUIDE.md`](CS2_SLIM_TREE_GUIDE.md) |
+| SteamDB CS2 depots（查文件路径/大小） | https://steamdb.info/app/730/depots/ |
+| DepotDownloader | https://github.com/SteamRE/DepotDownloader |
+| Source2Viewer-CLI 文档 | https://s2v.app/ValveResourceFormat/guides/command-line.html |
+| 本仓库地图组件（预构建包/注册表） | https://github.com/cyqmq/cs2-slim-maps |
