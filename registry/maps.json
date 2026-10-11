@@ -1,5 +1,5 @@
 {
-  "version": "2026-10-06",
+  "version": "2026-10-11",
   "note": "地图组件。核心 filelist 已包含全部 prefabs，组件只需提供地图 VPK 本身。每个地图组件也可以发布预构建包 (Release zip)。",
   "maps": {
     "de_dust2": {
