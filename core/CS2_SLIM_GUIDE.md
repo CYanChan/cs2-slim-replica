@@ -1,160 +1,271 @@
-﻿# CS2 精简专用服务端 · 复刻指南
+﻿# 纯手动复刻 CS2 精简服务端（仅用 DepotDownloader + Source2Viewer-CLI）
 
-> 目标：将原版 72.3GB 的 CS2 专用服务器精简到 **约 1.7GB（Linux）/ 约 1.9GB（Windows）（解压后）**，单地图（de_dust2）可用，-insecure 模式运行。
-> 本指南记录完整过程、关键命令、踩坑点与注意事项，供复刻参考。
-
----
-
-## 一、核心思路
-
-CS2 服务端体积主要由 `game/csgo/pak01_dir.vpk` 及其 **506 个编号数据块**（pak01_000~505）构成（约 53GB）。
-其中 **44GB 是纯客户端纹理、4.4GB 音频、其余为全景图/贴纸/UI**，服务器运行根本不需要。
-
-但引擎的 `gameinfo.gi` 会自动挂载 `csgo/` 下所有 `pak*_dir.vpk`，一旦挂载 `pak01_dir.vpk`，
-就会索引全部编号包，启动时读取实体/模型/数据时不断触发"缺包 FATAL"。
-
-**关键方案：**
-1. 只下载"含服务端必需内容"的编号包；
-2. 从这些包中**提取服务器真正需要的文件（模型/物理/材质/数据/脚本）为 loose files**（仅 557MB）；
-3. **移走 `pak01_dir.vpk` 和所有编号包**，让引擎不再挂载；
-4. loose files 按原路径放入 `csgo/` 目录，引擎优先加载 loose files；
-5. 保留地图 VPK + prefabs + 服务端二进制，启动即用。
+> 本指南由 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目收录，作为官方「纯手动复刻」参考；如需自动化构建 / 一键脚本 / 功能组件，见项目 README。
+>
+> 本文不依赖任何现成的精简仓库/脚本，只用两个通用开源工具，从 Steam depot 手动拉取并拼装出一个可运行的 CS2 精简服务端（约 1.7GB，单地图 de_dust2）。
+>
+> 工具：
+> - **DepotDownloader** — Steam depot 精确下载（GitHub: `SteamRE/DepotDownloader`）
+> - **Source2Viewer-CLI** — ValveResourceFormat 的命令行版，负责 VPK 解析与提取（官网: https://s2v.app ）
 
 ---
 
-## 二、环境与磁盘预算
+## 一、原理回顾（为什么能精简）
 
-- Debian 12，x86_64，磁盘 **20GB**（原版 72GB 装不下，必须精简）
-- 需要能访问 GitHub 与 Steam CDN
+- CS2 服务端 72.3GB 里，约 53GB 是 `game/csgo/pak01_*.vpk`（其中 44GB 是客户端纹理、4.4GB 音频）。
+- **服务器进程不渲染、不播音**，这些纯客户端资产可以不要。
+- 但引擎会通过 `pak01_dir.vpk` 索引全部编号包，缺包即 FATAL，所以不能直接删。
+- 利用 Source 2 加载优先级 **`loose files > addon VPK > game VPK`**：
+  把服务器需要的文件从编号包里**提取成散文件**放回 `csgo/`，然后**移走全部编号包**，引擎就只读散文件，不会再碰 VPK。
 
 ---
 
-## 三、工具准备
+## 二、准备工作
 
-| 工具 | 用途 | 获取 |
-|------|------|------|
-| DepotDownloader 3.4.0 | Steam depot 下载 | GitHub `SteamRE/DepotDownloader` releases，选 `DepotDownloader-linux-x64.zip`（自包含，无需 .NET） |
-| Source2Viewer-CLI 20.0 | VPK 分析/提取 | GitHub `ValveResourceFormat/ValveResourceFormat` releases，选 `cli-linux-x64.zip` |
-| Python 3 | VPK 解析脚本 | 本指南附带脚本 |
+### 2.1 下载工具
+
+| 工具 | 获取方式 |
+|------|---------|
+| DepotDownloader | GitHub `SteamRE/DepotDownloader` Releases → 下载对应平台 zip，解压后得到可执行文件（Linux 是 `DepotDownloader`，Windows 是 `DepotDownloader.exe`） |
+| Source2Viewer-CLI | https://s2v.app → Download → 选择 `Source2Viewer-CLI`（Linux 二进制 / Windows exe） |
+
+Linux 下如果运行 Source2Viewer-CLI 报 libicu 缺失：
+```bash
+apt install -y libicu72        # Debian/Ubuntu
+# 或免安装：
+export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+```
+
+### 2.2 磁盘预算
+
+| 阶段 | 占用 |
+|------|-----|
+| depot 原始下载（filelist 精选） | ~7GB |
+| 提取出的 loose files | ~0.6GB |
+| 最终精简树 | ~1.7GB 解压后 |
+
+建议预留 **20GB** 磁盘。
+
+---
+
+## 三、第一步：拉取 depot manifest（只分析，不下载）
+
+CS2（AppID 730）相关的 depot：
+
+| Depot ID | 内容 | 体积 |
+|----------|------|------|
+| 2347770 | 共享内容（csgo 资产 + core 引擎） | ~65GB |
+| 2347773 | Linux 服务端二进制 | ~7.2GB |
+| 2347771 | Windows 服务端二进制 | ~7GB |
+
+用 DepotDownloader 只拉 manifest，生成人类可读的文件清单：
+```bash
+mkdir -p manifests
+./DepotDownloader -app 730 -depot 2347770 -manifest-only -dir manifests
+./DepotDownloader -app 730 -depot 2347773 -manifest-only -dir manifests
+./DepotDownloader -app 730 -depot 2347771 -manifest-only -dir manifests
+```
+
+manifest 会输出到 `manifests/`，用于确认文件路径、大小，以及写 filelist 时抄路径。
+
+---
+
+## 四、第二步：编写 filelist 精确下载
+
+DepotDownloader 的 `-filelist` 支持三种行：
+```text
+精确路径:        game/csgo/maps/de_dust2.vpk
+通配路径:        game/csgo/maps/prefabs/*
+正则:            regex:.*\.vpk$
+```
+
+### 4.1 共享内容（depot 2347770）的 filelist
+
+关键：**不能只下 pak01_dir.vpk**，目录索引必须连它索引到的编号块一起下，否则提取时找不到数据。
+
+```text
+# —— VPK 目录索引（必须）——
+game/csgo/pak01_dir.vpk
+game/core/pak01_dir.vpk
+
+# —— 含服务器必需数据的编号包（按需迭代补充，见第八节踩坑）——
+game/csgo/pak01_003.vpk
+game/csgo/pak01_009.vpk
+game/csgo/pak01_022.vpk
+game/csgo/pak01_039.vpk
+game/csgo/pak01_050.vpk
+game/csgo/pak01_064.vpk
+game/csgo/pak01_081.vpk
+game/csgo/pak01_099.vpk
+game/csgo/pak01_106.vpk
+game/csgo/pak01_107.vpk
+game/csgo/pak01_109.vpk
+game/csgo/pak01_136.vpk
+game/csgo/pak01_140.vpk
+game/csgo/pak01_141.vpk
+game/csgo/pak01_147.vpk
+game/csgo/pak01_157.vpk
+game/csgo/pak01_158.vpk
+game/csgo/pak01_160.vpk
+game/csgo/pak01_166.vpk
+game/csgo/pak01_176.vpk
+game/csgo/pak01_178.vpk
+game/csgo/pak01_187.vpk
+game/csgo/pak01_188.vpk
+game/csgo/pak01_190.vpk
+game/core/pak01_004.vpk
+game/core/pak01_005.vpk
+# ……（首次可按此集合下载；启动报缺哪个包就补哪个，见第八节）
+
+# —— 地图与 prefabs（必须）——
+game/csgo/maps/de_dust2.vpk
+game/csgo/maps/prefabs/*
+
+# —— 服务器散配置 ——
+game/csgo/cfg/*
+game/csgo/gameinfo.gi
+game/csgo/gameinfo_branchspecific.gi
+game/csgo/steam.inf
+game/core/gameinfo.gi
+game/core/gameinfo_branchspecific.gi
+```
+
+### 4.2 服务端二进制（depot 2347773，Linux）
+
+```text
+game/bin/linuxsteamrt64/*
+game/csgo/bin/linuxsteamrt64/*
+```
+
+（Windows 则用 depot 2347771，路径换成 `game/bin/win64/*` 和 `game/csgo/bin/win64/*`。）
+
+### 4.3 执行下载
 
 ```bash
-mkdir -p /workspace/tools/depotdownloader
-cd /workspace/tools/depotdownloader
-curl -L -o dd.zip https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-linux-x64.zip
-unzip -o dd.zip && chmod +x DepotDownloader
+mkdir -p cs2_depot
+./DepotDownloader -app 730 -depot 2347770 -filelist csgo_filelist.txt -dir cs2_depot -os linux -osarch 64
+./DepotDownloader -app 730 -depot 2347773 -filelist bin_filelist.txt  -dir cs2_depot -os linux -osarch 64
 ```
 
-Source2Viewer-CLI 若提示缺 libicu，可用 `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1` 运行，或 `apt install libicu72`。
+> `-os linux -osarch 64` 显式指定目标平台；Windows 上换 `-os windows`。
+> 下载公开内容不需要登录；如遇旧 manifest 权限问题，加 `-username 你的账号` 交互登录。
 
 ---
 
-## 四、资产分析
+## 五、第三步：用 Source2Viewer-CLI 提取 loose files
 
-### 4.1 拉取 depot manifest（不下载内容）
+### 5.1 确认 VPK 结构
 
 ```bash
-./DepotDownloader -app 730 -depot 2347770 -manifest-only -dir /tmp/manifests
-./DepotDownloader -app 730 -depot 2347773 -manifest-only -dir /tmp/manifests
+cd cs2_depot/game/csgo
+./Source2Viewer-CLI -i pak01_dir.vpk --vpk_list | head -50
 ```
 
-关键发现：
-- **2347770（共享内容）：65GB，2989 个文件**
-  - `game/csgo/` 64.4GB（其中 pak01 编号包约 53GB、maps 10.2GB、shaders/panorama 等）
-  - `game/core/` 684MB（引擎核心，含 6 个小编号包）
-- **2347773（Linux 服务端二进制）：7.2GB，135 个文件**
-  - `game/bin/linuxsteamrt64/`（服务端 .so，238MB）
-  - `game/csgo/bin/`（122MB）
-  - `game/csgo_community_addons/`（6 张社区图，6.86GB，**可整体排除**）
-- **App 730 还有 731、2347774 等 depot（csgo_lv 低暴力内容）**，下载时务必用 `-depot` 显式指定，否则会把 1.1GB 多余内容也拉下来。
+你会看到 VPK 内的路径形如 `models/...`、`materials/...`、`textures/...`（不带 `game/csgo` 前缀）。
 
-### 4.2 解析 pak01_dir.vpk（Python）
+### 5.2 提取服务器需要的目录
 
-自行实现 VPK v2 目录解析：签名 `0x55aa1234`，版本 u32=2，树大小 u32；
-v2 头部后 16 字节为各 MD5 段大小；树从偏移 32 开始。
-条目格式：`CRC(u32) + preload(u16) + archiveIndex(u16) + offset(u32) + length(u32) + terminator(u16)`。
-注意：Valve 用**一个空格目录名表示根目录**（如 `" /gamemodes.txt"`），提取时要规范化路径。
+**保留**（服务器运行必需）：
+- `models/`（碰撞体/命中盒/物理）
+- `materials/`（材质表面属性）
+- `particles/`（粒子定义）
+- `resource/`（游戏数据）
+- `scripts/`（脚本/配置）
+- `weapons/`、`characters/`（武器/角色数据）
+- `soundevents/`（音效事件表，服务器要读触发逻辑）
 
-分类统计（csgo/pak01）：
-```
-textures       44GB   ← 纯客户端，排除
-sounds         4.4GB  ← 纯客户端，排除
-models/physics 583MB  ← 服务器需要（碰撞/命中盒）
-data/config    165MB  ← 服务器必需（items_game、脚本、gameevents）
-materials      99MB   ← 材质（含表面属性，保留）
-panorama/UI    几十MB ← 排除
+**排除**（纯客户端）：
+- `textures/`（44GB 纹理）
+- `sounds/`（音频采样）
+- `panorama/`、`stickers/`、`patches/`、`sprays/`、`shaders/`（UI/贴纸/着色器）
+
+用 `--vpk_filepath`（匹配路径开头，逗号分隔多个）精确提取：
+```bash
+mkdir -p loose
+./Source2Viewer-CLI -i pak01_dir.vpk -o loose \
+  --vpk_filepath "models/,materials/,particles/,resource/,scripts/,weapons/,characters/,soundevents/"
 ```
 
----
+> 不加 `--vpk_decompile`，输出的是**编译后原样文件**（`.vmdl_c`、`.vmat_c` 等），这正是服务器需要的格式。
+> `pak01_dir.vpk` 是 multi-chunk 的索引，Source2Viewer-CLI 会自动读取同目录的 `pak01_*.vpk` 编号块。
 
-## 五、下载精简集合
+core 引擎同样提取（排除客户端工具/UI）：
+```bash
+cd ../core
+mkdir -p loose_core
+./Source2Viewer-CLI -i pak01_dir.vpk -o loose_core \
+  --vpk_filepath "engine/,cfg/,resource/,scripts/"   # 根据实际 --vpk_list 结果调整
+```
+（core 体积小，也可以直接 `-o loose_core` 全量提取后手动删掉 `panorama/`、`tools/`。）
 
-### 5.1 生成 filelist（包含模式）
-
-DepotDownloader 3.x 的 `-filelist` 是**包含语义**：
-- 普通行 = 精确路径
-- `regex:` 前缀 = .NET 正则（可用负向断言做排除）
-
-下载集合（约 7GB）：
-- `pak01_dir.vpk` + 含 `data-config`/`soundevents` 内容的编号包（约 51 个）
-- 7 张竞技地图 VPK + `maps/prefabs/`（**必须！缺 prefab 会导致地图加载失败并回退 Idle**）
-- cfg、gameinfo.gi、steam.inf 等散文件
-- 服务端二进制（2347773 的 `game/bin/linuxsteamrt64` + `game/csgo/bin`）
+### 5.3 验证提取结果
 
 ```bash
-./DepotDownloader -app 730 -depot 2347770 -dir /workspace/cs2 -filelist main.txt
-./DepotDownloader -app 730 -depot 2347773 -dir /workspace/cs2 -filelist bin.txt
+find loose -type f | wc -l          # 预期约 1.9 万个文件，~550MB
+du -sh loose
 ```
 
-### 5.2 迭代补包
+---
 
-启动时若报 `FATAL ERROR: Error reading from loaded packed store ".../pak01_NNN.vpk"`，
-说明该包含服务器启动必需文件。从 console.log 提取包号，下载后重启，直到无 FATAL。
+## 六、第四步：手动组装精简树
 
 ```bash
-echo "game/csgo/pak01_$N.vpk" > iter.txt
-./DepotDownloader -app 730 -depot 2347770 -dir /workspace/cs2 -filelist iter.txt
+mkdir -p slim/game
+cd slim
+
+# 1) 服务端二进制（来自 depot 2347773）
+cp -r ../cs2_depot/game/bin/linuxsteamrt64        game/bin/
+cp -r ../cs2_depot/game/csgo/bin/linuxsteamrt64   game/csgo/bin/
+
+# 2) 共享内容：loose files 按 VPK 内相对路径放回 game/csgo
+cp -r ../cs2_depot/game/csgo/loose/*             game/csgo/
+
+# 3) 引擎 core
+cp -r ../cs2_depot/game/core/loose_core/*        game/core/
+
+# 4) 服务器散配置 + 地图 + prefabs
+cp -r ../cs2_depot/game/csgo/cfg                  game/csgo/cfg
+cp    ../cs2_depot/game/csgo/maps/de_dust2.vpk    game/csgo/maps/
+cp -r ../cs2_depot/game/csgo/maps/prefabs         game/csgo/maps/
+cp    ../cs2_depot/game/csgo/gameinfo.gi          game/csgo/
+cp    ../cs2_depot/game/csgo/gameinfo_branchspecific.gi  game/csgo/
+cp    ../cs2_depot/game/csgo/steam.inf            game/csgo/
+cp    ../cs2_depot/game/core/gameinfo.gi          game/core/
+cp    ../cs2_depot/game/core/gameinfo_branchspecific.gi  game/core/
+
+# 5) 移走所有编号包（核心！）
+rm -f game/csgo/pak01_*.vpk
+rm -f game/core/pak01_*.vpk
 ```
 
-> 实测补了约 26 个额外包（003/064/140/305/335/358/386/407/473...）。这是"含必需文件的混合包"，
-> 里面大部分是纹理，但 VPK 按包分发无法只取文件，所以用下一节的提取方案只保留精华。
+> 精简树里**绝不能残留任何 `pak*_dir.vpk` 或 `pak01_*.vpk`**，否则引擎会挂载索引并找编号块。
+
+最终结构：
+```text
+slim/
+├── game/
+│   ├── bin/linuxsteamrt64/          # cs2 服务端主程序 + 依赖 .so
+│   ├── core/                     # 引擎核心（loose files + gameinfo.gi）
+│   └── csgo/
+│       ├── bin/linuxsteamrt64/   # csgo 层二进制
+│       ├── cfg/                  # 服务器配置
+│       ├── maps/de_dust2.vpk     # 地图
+│       ├── maps/prefabs/         # 地图预置实体（必须）
+│       ├── models/ materials/ particles/ resource/ scripts/ weapons/ characters/ soundevents/  # loose files
+│       ├── gameinfo.gi
+│       └── steam.inf
+```
 
 ---
 
-## 六、提取 loose files（核心步骤）
-
-**原理**：Source 2 文件系统优先级 `loose files > addon VPK > game VPK`。
-把服务器需要的文件从编号包中提取到 `csgo/` 对应路径，之后移走 `pak01_dir.vpk`，
-引擎就从 loose files 加载，不再触碰编号包。
-
-筛选规则（提取约 557MB / 19345 文件）：
-- **排除**：`*.vtex_c/*.vtex/*.vsnd_c/*.vsnd`（纹理/音频）、`panorama/`、`stickers/`、`patches/`、`sprays/`、`shaders/`
-- **保留**：`models/`、`materials/`、`particles/`、`resource/`、`scripts/`、`weapons/`、`characters/`、`soundevents/` 等
-
-提取后用 `mv` 将 `csgo/pak01_*.vpk` 全部移出（例如备份到 `/workspace/cs2_pak_backup`），
-确认 `csgo/` 下不再有任何 `*.vpk`。
-
-> 这一步之后，补包循环从根源消失。
-
----
-
-## 七、启动配置与踩坑
+## 七、第五步：部署与启动
 
 ### 7.1 steamclient.so（64 位）
 
-CS2 服务端需要 64 位 `steamclient.so`，放在 `$HOME/.steam/sdk64/steamclient.so`（容器里 HOME 通常是 `/home/container`；非容器 root 则是 `/root`）。
-
-> ⚠️ 注意：新版 SteamCMD 官方包（`steamcmd_linux.tar.gz`）**已不再包含** `linux64/steamclient.so`（包内只有 linux32 内容）。请改用下面的 Steam SDK 包方法。
->
-> 💡 一键脚本 prebuilt / source 模式以及 `start_server.sh` 已自动处理此文件（缺失时自动下载并链接到 `$HOME/.steam/sdk64/`）。以下为手动方法。
-
-从 Steam 客户端更新清单（`bins_sdk_ubuntu12.zip`）获取 `linux64/steamclient.so`：
+CS2 需要 64 位 `steamclient.so`，新版 SteamCMD 已不带，从 Steam SDK 包获取：
 ```bash
-mkdir -p /workspace/tools/steamclient64 && cd /workspace/tools/steamclient64
-# 1) 获取 manifest
 curl -fsSL -o manifest.txt https://client-update.akamai.steamstatic.com/steam_client_ubuntu12
-# 2) 解析 bins_sdk_ubuntu12.zip.<sha>
 SDK_FILE=$(grep -A4 '"bins_sdk_ubuntu12"' manifest.txt | grep '"file"' | sed -n 's/.*"file"[[:space:]]*"\([^"]*\)".*/\1/p')
-# 3) 下载并解压
 curl -fsSL -o bins_sdk.zip "https://steamcdn-a.akamaihd.net/client/$SDK_FILE"
 python3 - <<'PY'
 import zipfile, os
@@ -162,628 +273,85 @@ with zipfile.ZipFile("bins_sdk.zip") as z:
     z.extract("linux64/steamclient.so")
 os.replace("linux64/steamclient.so", "steamclient.so")
 PY
-rm -rf linux64 bins_sdk.zip manifest.txt
-# 4) 链接到服务端 sdk64
 mkdir -p "$HOME/.steam/sdk64"
-ln -sf /workspace/tools/steamclient64/steamclient.so "$HOME/.steam/sdk64/steamclient.so"
+ln -sf "$(pwd)/steamclient.so" "$HOME/.steam/sdk64/steamclient.so"
 ```
 
-如果启动时出现 `Failed to load module '.../.steam/sdk64/steamclient.so'` 并段错误，通常是该符号链接缺失/指向无效文件，或 steamclient.so 被截断。可用以下命令诊断：
-```bash
-ls -la "$HOME/.steam/sdk64/"
-file "$HOME/.steam/sdk64/steamclient.so"   # 应输出 ELF 64-bit ... x86-64
-readlink -f "$HOME/.steam/sdk64/steamclient.so"
-```
+### 7.2 V8 库符号链接（关键）
 
-### 7.2 V8 库符号链接（关键坑）
-
-CS2 启动时会在 `game/csgo/bin/linuxsteamrt64/` 下找 `libv8.so` 等 V8 库，
-但它们实际在 `game/bin/linuxsteamrt64/`。必须做符号链接：
+CS2 去 `game/csgo/bin/linuxsteamrt64/` 找 V8 库，但它们实际在 `game/bin/linuxsteamrt64/`：
 ```bash
-cd /workspace/cs2/game/csgo/bin/linuxsteamrt64
-for f in libv8.so libv8system.so libv8_icui18n.so libv8_icuuc.so libv8_libbase.so libv8_libcpp.so libv8_libplatform.so libv8_zlib.so; do
-  ln -sf /workspace/cs2/game/bin/linuxsteamrt64/$f $f
+cd game/csgo/bin/linuxsteamrt64
+for f in libv8.so libv8system.so libv8_icui18n.so libv8_icuuc.so \
+         libv8_libbase.so libv8_libcpp.so libv8_libplatform.so libv8_zlib.so; do
+  ln -sf "../../../bin/linuxsteamrt64/$f" "$f"
 done
+cd -
 ```
 
-### 7.3 启动参数
+### 7.3 可执行权限 + 启动
 
 ```bash
-PORT="${SERVER_PORT:-${CS2_PORT:-27015}}"   # 面板 SERVER_PORT > 用户 CS2_PORT > 默认 27015
+chmod +x game/bin/linuxsteamrt64/cs2
+
 ./game/bin/linuxsteamrt64/cs2 \
-  -dedicated +map de_dust2 +hostname "SlimTest" \
-  -maxplayers 12 -ip 0.0.0.0 -port "$PORT" \
+  -dedicated +map de_dust2 +hostname "ManualSlim" \
+  -maxplayers 12 -ip 0.0.0.0 -port 27015 \
   -insecure -condebug +game_type 0 +game_mode 0 \
   +sv_pure 0 +sv_cheats 1
 ```
 
-> 端口优先级：**面板 `SERVER_PORT` > 用户变量 `CS2_PORT` > 默认 27015**。普通环境默认 **27015**；本地想换端口设置 `CS2_PORT=28000`；简幻欢等面板注入 `SERVER_PORT`（随机端口）会自动顶掉 `CS2_PORT`，无需手动改。
-
-- `-insecure`：禁用 VAC（服务端必须）
-- `sv_pure 0`：关闭客户端文件一致性校验（因为服务端已精简文件）
-- 客户端连接也必须加 `-insecure` 启动参数
-
-### 7.4 后台运行注意
-
-- 用后台终端运行且 **timeout=0**（否则 10 分钟会被杀）
-- `-condebug` 写 `console.log` 方便排错
-
----
-
-## 八、最终验证
-
-```
-[Server] SV:  12 player server started
-[Server] CSource2Server::GameServerSteamAPIActivated()
-UDP ${SERVER_PORT:-${CS2_PORT:-27015}} 监听
-```
-
-客户端：Steam 启动项加 `-insecure` → 控制台 `connect 服务器IP:${SERVER_PORT:-${CS2_PORT:-27015}}`
-
----
-
-## 九、最终体积
-
-| 项 | 大小 |
-|----|------|
-| 完整原版 | 72.3GB |
-| 7 图精简版（解压，历史） | 4.8GB |
-| 沙2单图精简版（解压，Linux） | 约 1.7GB |
-| 沙2单图精简版（解压，Windows） | 约 1.9GB |
-
-> 体积随 CS2 更新浮动：早期版本曾为 2.5GB（解压）/ 压缩包 1.7GB；当前以 `DEVELOP.md`「实测记录」为准（v1.1.0：Linux 1.67GB / Windows 1.90GB）。
-
----
-
-## 十、下载与部署
-
-下载页面提供：完整包 + 9 个 200MB 分卷（支持 HTTP Range 断点续传、多线程）。
-
-```bash
-# Linux 合并分卷
-cat cs2-slim.tar.gz.part* > cs2-slim.tar.gz
-sha256sum -c sha256sums.txt
-
-# 解压部署
-tar -xzf cs2-slim.tar.gz
-cd cs2
-chmod +x start_server.sh
-./start_server.sh
-```
-
----
-
-## 十一、注意事项清单（体检清单）
-
-1. **磁盘**：原版 72GB 无法装入 20GB 环境，必须先用 `-manifest-only` 分析再下载，避免盲目全量。
-2. **depot 选择**：始终显式 `-depot 2347770 / 2347773`，否则会拉入 csgo_lv 等多余 depot。
-3. **filelist 语义**：3.x 是包含模式；如需排除用 `regex:` 负向断言。
-4. **prefabs 必须下载**：`maps/prefabs/` 缺失会导致地图 Spawn 后 `GameServerSteamAPIDeactivated` 回退 Idle。
-5. **V8 符号链接**：漏掉会在 `CAppSystemDict` 阶段 SIGTRAP。
-6. **steamclient.so**：必须是 64 位，放 `/root/.steam/sdk64/`；32 位会报 `ELFCLASS32` 并 segfault。
-7. **后台超时**：服务器用 timeout=0 的后台终端，否则 10 分钟被自动终止。
-8. **-validate 不影响精简**：DepotDownloader `-validate` 只校验 filelist 内文件，不会补回被排除的包。
-9. **客户端**：连精简服必须 `-insecure` + 服务器 `sv_pure 0`。
-
----
-
-## 十二、附录：可直接运行的 filelist
-
-已按本指南流程生成两份最终 filelist（基于实测下载集合，77 个 csgo 编号包 + 必需散文件），
-复刻者可直接交给 DepotDownloader 使用：
-
-| 文件 | 对应 depot | 内容 |
-|------|-----------|------|
-| `filelist_2347770.txt` | 2347770（共享内容） | pak01_dir + 77 个编号包 + core 004/005 + de_dust2 + prefabs + cfg/散文件 |
-| `filelist_2347773.txt` | 2347773（Linux 二进制） | `game/bin/linuxsteamrt64/` + `game/csgo/bin/`，排除 csgo_community_addons |
-
-使用命令：
-
-```bash
-./DepotDownloader -app 730 -depot 2347770 -dir /workspace/cs2 -filelist filelist_2347770.txt
-./DepotDownloader -app 730 -depot 2347773 -dir /workspace/cs2 -filelist filelist_2347773.txt
-```
-
-> 说明：
-> 1. `-filelist` 为包含语义，`regex:` 行是正则。
-> 2. 下载完成后，继续按第六节执行"提取 loose files"，再按第七节移走编号包、配置启动。
-> 3. 此 filelist 是最小集合；若启动报缺某编号包，按 5.2 节迭代补充即可。
-
----
-
-## 十三、Windows 精简版适配（实测验证）
-
-> 2026-10-06 实测：Windows Server 2022 上按本方案复刻成功，
-> 服务端达到第八节全部验证标准。证明精简法跨平台通用。
-
-### 13.1 与 Linux 版的差异
-
-| 环节 | Linux 版 | Windows 版 |
-|------|----------|------------|
-| 二进制 depot | 2347773（Linux 64-bit） | **2347771（730 Windows，含 `game/bin/win64/cs2.exe`）** |
-| 可执行文件 | `game/bin/linuxsteamrt64/cs2` | `game/bin/win64/cs2.exe` |
-| Steam 连接 | `steamclient.so` → `/root/.steam/sdk64/` | `steamclient64.dll` + `tier0_s64.dll` + `vstdlib_s64.dll` → `game\bin\win64\` |
-| V8 库 | `game/csgo/bin/linuxsteamrt64/` 符号链接 | `game/csgo/bin/win64/` 复制 7 个 `v8*.dll` |
-| 启动脚本 | `start_server.sh` + `setup.sh` | `start_server.bat` |
-
-### 13.2 Windows 二进制下载
-
-创建 `filelist_2347771.txt`（与 2347773 同格式，路径换成 `win64`）：
-
-```
-# Depot 2347771 - CS2 Windows server binaries (slim)
-# Server binaries + game binaries, exclude csgo_community_addons
-regex:^game/bin/win64/
-regex:^game/csgo/bin/
-```
-
-下载命令：
-
-```bash
-./DepotDownloader -app 730 -depot 2347771 -dir /workspace/cs2 -filelist filelist_2347771.txt
-```
-
-实测下载约 172MB（解压 543MB），包含 `game/bin/win64/*.dll` 与
-`game/csgo/bin/win64/{client,host,matchmaking,server}.dll`。
-
-### 13.3 steamclient 三件套（关键坑）
-
-Windows 服务端从可执行文件所在目录加载 steamclient 相关 DLL。
-首次启动若不放置会报：
-
-```
-FATAL ERROR: Failed to initialize Steamworks SDK for gameserver.
-  Could not determine Steam client install directory.
-```
-
-修复：从 Steam 客户端更新包 `bins_win32.zip`（获取方式见 13.4）中提取：
-
-- `steamclient64.dll`
-- `tier0_s64.dll`
-- `vstdlib_s64.dll`
-
-复制到 `game\bin\win64\`（与 `cs2.exe` 同目录）。实测日志随后变为：
-
-```
-[Server] SteamGameServer_Init() OK, logging on to Steam
-[Server] SV:  Connection to Steam servers successful.
-[Server] SV:  12 player server started
-```
-
-### 13.4 Steam 客户端更新包获取
-
-从官方 CDN 获取当前 Windows 客户端 manifest：
-
-```bash
-curl -L -o steam_client_win32 https://client-update.akamai.steamstatic.com/steam_client_win32
-```
-
-在 manifest 中查找 `bins_win32.zip.<sha>`，然后下载：
-
-```bash
-curl -L -o bins_win32.zip \
-  https://steamcdn-a.akamaihd.net/client/bins_win32.zip.<sha>
-```
-
-> 注意：本机网络对 Steam CDN 单连接约 3MB 限速，大文件需用
-> **1MB Range 分块下载再拼接**（`curl -r 0-999999` 逐块请求，
-> 拼接脚本见仓库 `scripts/`）。
-
-解压后即可得到 `steamclient64.dll`、`tier0_s64.dll`、`vstdlib_s64.dll`。
-
-### 13.5 组装 Windows 精简树
-
-与 Linux 版完全相同的 loose files（来自 depot 2347770），仅替换：
-
-1. `game/bin/win64/` ← depot 2347771
-2. `game/csgo/bin/win64/` ← depot 2347771
-3. V8 DLL 复制：
-   ```bat
-   copy game\bin\win64\v8.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8system.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8_icui18n.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8_icuuc.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8_libbase.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8_libplatform.dll game\csgo\bin\win64\
-   copy game\bin\win64\v8_zlib.dll game\csgo\bin\win64\
-   ```
-4. steamclient 三件套复制到 `game/bin/win64/`
-5. 移除所有 `pak01_*.vpk`，保留 `de_dust2.vpk` + `maps/prefabs/`
-
-### 13.6 启动与验证
-
-`start_server.bat`：
-
-```bat
-@echo off
-cd /d "%~dp0"
-set "PORT=27015"
-if defined CS2_PORT set "PORT=%CS2_PORT%"       :: 用户变量
-if defined SERVER_PORT set "PORT=%SERVER_PORT%"   :: 面板参数优先
-game\bin\win64\cs2.exe -dedicated +map de_dust2 +hostname "SlimTest" \
-  -maxplayers 12 -ip 0.0.0.0 -port %PORT% \
-  -insecure -condebug +game_type 0 +game_mode 0 \
-  +sv_pure 0 +sv_cheats 1
-```
-
-> 端口优先级：**`SERVER_PORT`（面板环境变量）> `CS2_PORT`（用户设置）> 默认 27015**。`start_server.bat` 会自动按此顺序取值；本地想换端口先 `set CS2_PORT=28000`。
-
-验证标准（与第八节相同）：
-
-```
+验证启动日志出现：
+```text
 [Server] SV:  12 player server started
 [Server] CSource2Server::GameServerSteamAPIActivated()
 [Networking] Network socket 'server' opened on port 27015
 ```
 
-实测最终体积：解压 1.92GB（20,408 文件），zip 1.24GB。
+---
 
-### 13.7 Windows 版注意事项
+## 八、踩坑与迭代
 
-- 无需安装 Steam 客户端（三件套 DLL 已随包内置）。
-- 启动时的 `Failed loading resource ... (ERROR_FILEOPEN)` 是外观类物品
-  （钥匙扣/纪念品/小鸡等）缺失，非致命，符合精简设计。
-- 地图光照纹理 `.vtex` 因排除规则未提取，服务端回退错误纹理，不影响服务器逻辑。
-- 若提示缺某 `pak01_NNN.vpk`，与 Linux 版同样按 5.2 节迭代补充。
-- 客户端连接仍需 Steam 启动项加 `-insecure`。
+### 8.1 缺包 FATAL（最重要）
+
+启动时报：
+```text
+FATAL ERROR: Error reading from loaded packed store ".../pak01_NNN.vpk"
+```
+说明该编号包含服务器必需文件。处理：
+1. 从 console.log 提取包号 `NNN`
+2. 把该包加进 filelist 重新下载
+3. **重新用 Source2Viewer-CLI 提取**（因为该包里的必需文件还没进 loose files）
+4. 重新组装
+
+重复直到无 FATAL。实测首轮之后通常还要补约 26 个包。
+
+### 8.2 prefabs 缺失 → 服务器回退 Idle
+
+地图加载后 `GameServerSteamAPIDeactivated` 回退 Idle，多半是 `maps/prefabs/` 没复制。补上即可。
+
+### 8.3 启动报 `Failed to load module ... steamclient.so`
+
+- 检查 `$HOME/.steam/sdk64/steamclient.so` 是否为有效 64 位 ELF：`file` 命令应输出 `ELF 64-bit ... x86-64`
+- 检查 V8 符号链接是否建立
+
+### 8.4 缺 libicu / Source2Viewer-CLI 跑不起来
+
+```bash
+export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+```
+
+### 8.5 `-insecure` 必须
+
+精简树缺少完整客户端资产，必须用 `-insecure` 模式（社区服务器常规做法），不要连官方匹配。
 
 ---
 
-## 十四、版本更新记录
+## 九、参考
 
-> 2026-10-06 CS2 更新后，按本方案重建，实测验证方法持久性。
-
-### 14.1 更新内容
-
-- 重新下载三个 depot（**filelist 不变**）：
-
-  | depot | 新 manifest | 日期 |
-  |-------|------------|------|
-  | 2347770（共享内容） | 7820179980365915207 | 10/05/2026 22:26 |
-  | 2347773（Linux 二进制） | 8082014506965878039 | 10/05/2026 21:25 |
-  | 2347771（Windows 二进制） | 459013114122940128 | 10/05/2026 21:25 |
-
-- 重新提取 loose files：csgo 19,187 文件 / 514.4MB；core 878 文件 / 36.6MB。
-- 重新组装：Linux 1.67GB / 20,210 文件；Windows 1.90GB / 20,261 文件。
-- Windows 实测启动成功，`GC Connection established for server version 2000927`。
-
-### 14.2 关键结论
-
-- **filelist 无需改动**：三个 filelist 在新版本上直接可用。
-- **编号包自动增删**：DepotDownloader 增量更新会自动删除已不在 manifest 中的本地包
-  （本次删除 `pak01_505.vpk`），无需手工干预。
-- **方法持久性得到实测验证**：只要按 5.2 节"迭代补充"处理启动时报缺的编号包，
-  精简法可以跟随任意 CS2 版本。
-
----
-
-## 十五、多仓库架构与 cs2slim CLI（可选）
-
-> 为方便按需组合「精简核心 + 地图 + 功能」，配方拆成**多仓库**，并提供配置/参数驱动的入口脚本。
-
-### 15.1 仓库分工
-
-| 仓库 | 角色 |
+| 资源 | 链接 |
 |------|------|
-| cyqmq/cs2-slim-replica | **主仓库**：核心配方（本指南 + filelist + 脚本）+ 入口 CLI cs2slim.py + 组件注册表 |
-| cyqmq/cs2-slim-maps | 地图组件：每图一个 ilelist.txt 片段 + 元数据，可选预构建包 |
-| cyqmq/cs2-slim-features | 功能组件：bots 人机（服务端 bot 玩法 + 客户端离线练习） |
-
-核心 filelist 已包含全部 prefabs，因此**选配地图只需把地图 VPK**（如 game/csgo/maps/de_mirage.vpk）追加到下载清单。
-bots 是引擎内置功能，无需额外 depot 文件，只需 cfg 配置。
-
-### 15.2 CLI 子命令
-
-```bash
-python cs2slim.py init                  # 生成 slim.yaml 模板
-python cs2slim.py download --config slim.yaml   # 组合 filelist + 调用 DepotDownloader
-python cs2slim.py extract  --config slim.yaml   # 提取 loose files
-python cs2slim.py build    --config slim.yaml    # 组装精简树（含选配地图）
-python cs2slim.py package  --config slim.yaml --format zip
-python cs2slim.py run      --config slim.yaml   # 启动服务端
-`
-
-### 15.3 配置驱动（推荐）
-
-编辑 slim.yaml：
-
-`yaml
-platform: win64            # linux | win64
-maps:
-  - de_dust2
-  - de_mirage            # 选配地图
-features:
-  - bots                 # 选配功能
-workdir: ./cs2-build
-depot_tool: C:\path\to\DepotDownloader.exe
-`
-
-### 15.4 纯命令行参数
-
-```bash
-python cs2slim.py download --platform linux --maps de_dust2,de_mirage --features bots
-`
-
-### 15.5 预构建包（可选）
-
-- 地图：从 cs2-slim-maps Release 下载 de_mirage.zip 等，解压到 game/csgo/maps/。
-- 功能：从 cs2-slim-features Release 下载 bots-pack.zip，解压后按说明部署 cfg。
-
-### 15.6 一键安装（curl | bash / irm | iex）
-
-> 💡 不想手写命令？用 **在线指令生成器**（GitHub Pages）：<https://cyqmq.github.io/cs2-slim-scripts/>，可视化选择地图/功能/模式后自动生成并复制命令。
-
-主仓库提供零依赖一键脚本，自动下载工具与 steamclient，并执行 CLI 一键流程。支持两种模式：
-
-- **source（默认）**：下载工具 → 获取配方 → 下载 depot → 提取 → 组装（首次约 1.5GB 下载）
-- **prebuilt**：直接从 GitHub Release 拉取预构建精简包并自动拼装地图/功能组件（核心包约 1.1GB 下载，更快）。地图支持：`de_dust2`（核心内置）+ 全部 8 张竞技地图（`de_mirage / de_inferno / de_ancient / de_anubis / de_cache / de_nuke / de_overpass / de_train / de_vertigo`）均有预构建包；若地图暂无预构建包，prebuilt 模式会**明确报错退出**——需要该地图请用 `source` 模式
-
-**Linux（curl | bash）**
-
-> ⚠️ 管道右侧的 `bash` 收不到 `CS2_MODE=... curl ... | bash` 里的变量，请先用 `export` 设置。
-
-```bash
-# 默认: de_dust2（source 模式）
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-
-# 选配地图/人机/打包（source 模式）
-export CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=bots CS2_PACKAGE=1
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-
-# 预构建模式: 直接拉取 Release 包自动拼装
-export CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=bots
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-
-# 国内网络受限: 加 GitHub 加速代理
-export CS2_GH_PROXY=https://ghproxy.com CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-**Windows（irm | iex）**
-
-```powershell
-# 默认: de_dust2（source 模式）
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-
-# 选配地图/人机/打包（source 模式）
-$env:CS2_MAPS = 'de_dust2,de_mirage'; $env:CS2_FEATURES = 'bots'; $env:CS2_PACKAGE = '1'
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-
-# 预构建模式: 直接拉取 Release 包自动拼装
-$env:CS2_MODE = 'prebuilt'; $env:CS2_MAPS = 'de_dust2,de_mirage'; $env:CS2_FEATURES = 'bots'
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-
-# 国内网络受限: 加 GitHub 加速代理
-$env:CS2_GH_PROXY = 'https://ghproxy.com'; $env:CS2_MODE = 'prebuilt'; $env:CS2_MAPS = 'de_dust2,de_mirage'
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-**CLI 一键模式（等价）**
-
-```bash
-python cs2slim.py all --config slim.yaml           # source: download + extract + build
-python cs2slim.py all --config slim.yaml --package  # source: 全流程 + 打包
-python cs2slim.py prebuilt --config slim.yaml        # prebuilt: 拉取 Release 包自动拼装
-python cs2slim.py prebuilt --config slim.yaml --dry-run  # 只预览要下载的包
-```
-
-一键脚本支持环境变量：CS2_MODE / CS2_MAPS / CS2_FEATURES / CS2_WORKDIR / CS2_PACKAGE / CS2_DRY_RUN / CS2_GH_PROXY / CS2_PANEL。
-CS2_DRY_RUN=1 时只生成配置并打印将执行的命令，不下载 depot/核心包/功能包，也不执行构建（可用于预览）。注意：仍会获取主仓库脚本（供面板 dry-run 的 `start.sh` 模板回退）。
-
-### 15.7 面板用户（简幻欢 / Pterodactyl 等）
-
-面板（如简幻欢、Pterodactyl）通常要求启动命令指向服务器根目录（`/home/container`）下的 `start.sh`，且**默认只给 `start.sh` 执行权限**。解决方案：
-
-**方案 A：一键脚本面板模式（推荐）**
-
-```bash
-export CS2_MODE=prebuilt CS2_MAPS=de_dust2 CS2_PANEL=1
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-完成后会自动在 `$HOME/start.sh` 生成**内置一键安装+启动逻辑**的面板启动脚本：
-
-- 若 `start.sh` 不存在 → 从模板 `core/deploy/linux/start_panel.sh` 生成
-- 若已存在 → 覆盖为最新模板
-- 自动清理 BOM / CRLF，并补上 `cs2` 二进制执行权限
-
-**运行 / 启动配置区**：`start.sh` 顶部内嵌了「★ 运行 / 启动配置」，端口、网络模式（`CS2_NET_MODE`）、服务器密码（`CS2_PASSWORD`）、插件管理 Web（`CS2LM_WEB`）、GSLT 等全部可以直接编辑 `start.sh` 修改（环境变量仍优先）。简幻欢启动命令固定为 `bash start.sh`、面板里无法配环境变量时，直接改 `start.sh` 即可。
-
-然后在面板里把启动命令设为：
-
-```bash
-bash start.sh
-```
-
-**启动流程（全自动）**：
-
-1. **首次启动**：`start.sh` 检测到精简树未安装 → 自动执行 prebuilt 一键安装（下载核心包+地图+功能，约 1.1GB）→ 重新执行自身 → 启动服务端
-2. **后续启动**：直接修复 `cs2` 执行权限 → 链接 `steamclient.so` → 创建 V8 符号链接 → 启动服务端
-
-**方案 B：手动放置模板**
-
-把仓库里的 `core/deploy/linux/start_panel.sh` 复制到面板根目录为 `start.sh`：
-
-```bash
-cp cs2-slim-build/repo/core/deploy/linux/start_panel.sh ~/start.sh
-chmod +x ~/start.sh
-```
-
-该模板每次启动前会自动：
-
-1. 定位精简树（默认 `$HOME/cs2-slim-build/slim`，可用 `CS2_SLIM_DIR` 覆盖）
-2. 若未安装 → 自动执行一键安装（可用 `CS2_MAPS` / `CS2_FEATURES` 定制）
-3. 修复 `cs2` 执行权限（面板默认只给 `start.sh` 权限，由它给其他文件授权）
-4. 搜索并链接 `steamclient.so` 到 `$HOME/.steam/sdk64/steamclient.so`（优先精简树根目录 → `game/bin/linuxsteamrt64` → 全盘搜索 `linux64`）
-5. 创建 V8 库符号链接
-6. 以 `-insecure +sv_pure 0` 启动服务端（精简服必须关闭文件一致性校验）
-
-### 15.8 插件框架适配（Metamod:Source）
-
-精简服支持加载 **Metamod:Source**（CS2 基础插件框架，CounterStrikeSharp 等插件都依赖它）。已作为功能组件发布：
-
-```bash
-export CS2_MODE=prebuilt CS2_FEATURES=metamod
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-拼装时自动完成：
-
-1. 解压 `metamod-pack.zip`（Metamod:Source 2.0.0-git1473，linuxsteamrt64）到 `game/csgo/addons/` 结构
-2. 自动在 `game/csgo/gameinfo.gi` 的 SearchPaths 中加入 `Game csgo/addons/metamod`（幂等，重复执行不会重复添加）
-
-**原理**：该搜索路径让引擎优先加载 `addons/metamod/bin/linuxsteamrt64/libserver.so` 作为 GameDLL，从而注入插件框架。
-
-**验证**：启动后控制台输入 `meta version` / `meta list`；若显示 `Unknown command`，检查 `gameinfo.gi` 是否被 CS2 更新重置（重新拼装一次即可）。
-
-**后续**：安装 Metamod 后，可在 `game/csgo/addons/metamod/metaplugins.ini` 里加载其他插件（如 CounterStrikeSharp），或在 `slim.yaml` 的 `features` 中继续追加。
-
-### 15.9 CounterStrikeSharp（CSS）插件框架
-
-CSS 是 CS2 服务端最常用的 **C# 插件框架**，运行在 Metamod 之上。已作为功能组件发布，**Linux 版 `css`**（linuxsteamrt64，依赖 `metamod`）和 **Windows 版 `css-win`**（win64，依赖 `metamod-win`），均带 .NET 运行时：
-
-```bash
-# Linux
-export CS2_MODE=prebuilt CS2_FEATURES=metamod,css
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-```powershell
-# Windows
-$env:CS2_MODE = "prebuilt"; $env:CS2_FEATURES = "metamod-win,css-win"
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-拼装时自动完成：
-
-1. 先安装依赖（Metamod:Source，自动补 `gameinfo.gi`）
-2. 解压 CSS 功能包到 `game/csgo/addons/`，注册文件 `addons/metamod/counterstrikesharp.vdf`
-
-**验证**：启动后控制台输入 `meta list`，应看到：
-
-```
-  [01] CounterStrikeSharp (v1.0.376 @ 653d651) by Roflmuffin
-```
-
-输入 `css_plugins list` 查看用户插件（默认 0 个）。把你的 CSS 插件 dll 放入 `game/csgo/addons/counterstrikesharp/plugins/`，重启服务端即可加载。
-
-**注意**：
-- Linux 用 `css` 功能（依赖 `metamod`），Windows 用 `css-win`（依赖 `metamod-win`）。
-- 启动日志中的 `Could not PreloadLibrary ... Access violation` 是非致命警告，不影响 CSS 运行。
-- 本包使用 with-runtime 版，宿主机无需预装 .NET。
-
-### 15.10 SwiftlyS2 插件框架
-
-精简服支持加载 **SwiftlyS2**——一个基于 C++、支持 C# 插件的 CS2 脚本框架。已作为功能组件发布：**Linux 版 `swiftly`**（linuxsteamrt64）和 **Windows 版 `swiftly-win`**（win64），均带 .NET 运行时：
-
-```bash
-# Linux
-export CS2_MODE=prebuilt CS2_FEATURES=swiftly
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-```powershell
-# Windows
-$env:CS2_MODE = "prebuilt"; $env:CS2_FEATURES = "swiftly-win"
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-拼装时自动完成：
-
-1. 解压 `swiftly-pack.zip`（SwiftlyS2 v1.4.13，linuxsteamrt64/win64）到 `game/csgo/addons/swiftlys2/` 结构
-2. 自动在 `game/csgo/gameinfo.gi` 的 SearchPaths 中加入 `Game csgo/addons/swiftlys2`（幂等，重复执行不会重复添加）
-
-**特点**：独立框架，**不依赖 Metamod**（与 CSS 不同）；自带 .NET 运行时（with-runtimes 包）。
-
-**验证**：启动后控制台输入 `sw`。把你的 Swiftly 插件发布产物放入 `game/csgo/addons/swiftlys2/plugins/<PluginId>/`，重启服务端即可加载。
-
-### 15.11 Plugify 插件框架
-
-**Plugify** 是一个多语言插件系统（支持 C++、C#、Python、Lua、JS 等），以 **Metamod 插件**形式运行。已作为功能组件发布：**Linux 版 `plugify`**（linuxsteamrt64，依赖 `metamod`）和 **Windows 版 `plugify-win`**（win64，依赖 `metamod-win`）：
-
-```bash
-# Linux
-export CS2_MODE=prebuilt CS2_FEATURES=metamod,plugify
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-```powershell
-# Windows
-$env:CS2_MODE = "prebuilt"; $env:CS2_FEATURES = "metamod-win,plugify-win"
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-拼装时自动完成：
-
-1. 先安装依赖（Metamod:Source，自动补 `gameinfo.gi`）
-2. 解压 Plugify 功能包到 `game/csgo/addons/`，注册文件 `addons/metamod/plugify.vdf`
-
-**注意**：本包是 Plugify **最小加载器**（`libplugify` + `micromamba` 包管理器），不含语言模块。要运行插件，需先用 Plugify 包管理器安装对应语言模块与 s2sdk（详见 [plugify 官方文档](https://plugify.net/use-cases/metamod-plugin/installation/)）。
-
-**验证**：启动后控制台输入 `meta list`，应看到 Plugify 已加载。
-
-### 15.12 ModSharp C# 插件框架
-
-**ModSharp** 是一个现代化的 C# 插件框架（已服务超 400 万玩家）。已作为功能组件发布：**Linux 版 `modsharp`** 和 **Windows 版 `modsharp-win`**，均为独立框架（不依赖 Metamod）：
-
-```bash
-# Linux
-export CS2_MODE=prebuilt CS2_FEATURES=modsharp
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-```
-
-```powershell
-# Windows
-$env:CS2_MODE = "prebuilt"; $env:CS2_FEATURES = "modsharp-win"
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-拼装时自动完成：
-
-1. 解压 `modsharp-pack.zip`（git-180）到 `game/sharp/` 结构
-2. 自动在 `game/csgo/gameinfo.gi` 的 SearchPaths 中加入 `Game sharp`（幂等，重复执行不会重复添加）
-
-**注意**：包内**不自带 .NET 运行时**，需服务端预装 **.NET 10**（Windows 另需 Visual C++ Redistributable）。
-
-**验证**：启动后控制台输入 `ms`。把你的 ModSharp 模块放入 `game/sharp/modules/`，重启服务端即可加载。
-
-### 15.13 插件管理工具（cs2-link-manager / link-manager）
-
-[cs2-link-manager](https://github.com/cyqmq/cs2-link-manager)（`cs2lm`）是一个跨平台 CLI，用**符号链接**从中央仓库管理 CSS 插件：把插件文件保存在仓库，再链接进服务器，支持插件启停、profile 一键切换、反向导入（adopt）、`.cs2pkg` 打包和 Web UI。已作为选配功能 `link-manager` 发布（跨平台，需宿主机 **Python 3.11+**，不安装框架本身）：
-
-```bash
-# Linux: 和 CSS 一起装
-export CS2_MODE=prebuilt CS2_FEATURES=metamod,css,link-manager
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
-
-# Windows
-$env:CS2_MODE = "prebuilt"; $env:CS2_FEATURES = "metamod-win,css-win,link-manager"
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
-```
-
-拼装后服务器根目录出现 `cs2lm`（Linux）/ `cs2lm.bat`（Windows）启动器和 `tools/cs2lm/` 源码目录。使用：
-
-```bash
-cd <服务器根目录>          # 含 game/ 的目录
-./cs2lm init --server . --repo plugins-repo
-./cs2lm add MyPlugin ./path/to/MyPlugin/
-./cs2lm install MyPlugin
-./cs2lm list
-./cs2lm doctor
-```
-
-**注意**：
-- 需要宿主机 Python 3.11+；Windows 建议以管理员/开发者模式运行以获得真实符号链接，否则自动回退 junction/复制。
-- 本功能不安装 Metamod/CSS 框架，请搭配 `metamod`/`css`（或 `metamod-win`/`css-win`）使用。
-
-**简幻欢单端口双服务（可选配置）**：简幻欢只分配一个端口（`SERVER_PORT`）。CS2 走 UDP，cs2lm 管理 Web 走 TCP——同一端口号两种协议互不冲突（已实测）。这是**可选配置**：默认不启动 Web；设置环境变量 `CS2LM_WEB=1` 且已安装 `link-manager` 时，启动脚本（Linux 面板 `start_panel.sh` / Linux 本地 `start_server.sh` / Windows `start_server.bat`）会在 `SERVER_PORT` 上启动 Web：
-
-- Token：优先用 `CS2LM_WEB_TOKEN` 环境变量；**无论是否设置，token 都会写入服务器根目录 `web_token.txt`**（未设置时随机生成 16 位十六进制，权限 600）。
-- 访问：`http://<服务器IP>:<端口>/?token=<TOKEN>`。
-- 运行中的 CS2 控制台可手动 `exec cs2slim_token.cfg` 查看 token（启动时已生成在 `game/csgo/cfg/cs2slim_token.cfg`，不自动加入启动参数）。
-- PID 存 `web.pid`（重启自动清理旧进程），日志在 `web.log`（Windows 另存 `web.err.log`），启动失败会在控制台警告。
-- Linux：面板 `CS2LM_WEB=1 bash start_panel.sh`；本地 `CS2LM_WEB=1 bash start_server.sh`。
-- **简幻欢面板无法配置环境变量时**：直接编辑 `$HOME/start.sh` 顶部配置区，把 `export CS2LM_WEB="${CS2LM_WEB:-0}"` 中的 `0` 改成 `1` 即可。
-- Windows：在面板环境变量中配置 `CS2LM_WEB=1`，`start_server.bat` 即自动启用（需 `cs2lm.bat` 位于服务器根目录）。
-
-**一次性启动菜单**（三个启动脚本均内置）：首次交互启动时弹出菜单（`1` 完整启动 / `2` 只启动 Web / `3` 只启动 CS2 / `4` 查看 token / `5` 停止 Web / `6` 退出，15 秒无输入默认选 `1`），选择后 CS2 前台运行、日志正常显示。菜单只显示一次（`.cs2slim_menu_seen` 标记抑制后续显示）；想再次打开用 `bash start_server.sh menu`（面板场景可在 `start.sh` 顶部加 `export CS2LM_MENU=1` 或面板环境变量设 `CS2LM_MENU=1`）；面板自动重启建议设 `CS2LM_AUTO=1` 或启动命令加 `auto` 跳过菜单。
+| DepotDownloader | https://github.com/SteamRE/DepotDownloader |
+| ValveResourceFormat / Source2Viewer-CLI | https://github.com/ValveResourceFormat/ValveResourceFormat |
+| Source2Viewer-CLI 命令行文档 | https://s2v.app/ValveResourceFormat/guides/command-line.html |
+| CS2 SteamDB depot 信息（2347770/2347771/2347773） | https://steamdb.info/app/730/depots/ |
