@@ -21,12 +21,19 @@
 | `CS2_GH_PROXY` | 空 | GitHub 加速代理前缀（如 `https://ghproxy.com`），用于仓库 / Release 下载 |
 | `CS2_PANEL` | `0` | `1` = 面板模式（简幻欢 / Pterodactyl 等）：完成后在 `$HOME` 生成 `start.sh`；**`CS2_DRY_RUN=1` 时也会生成 `start.sh` 预览**（供面板先配置启动命令） |
 
-**示例**（prebuilt 一键安装 + 地图 + 功能）：
+**示例**（一键安装 + 地图 + 功能）：
 
 ```bash
-export CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=metamod,css,link-manager
+# source 模式（支持任意地图）：de_dust2 + de_mirage + 功能
+export CS2_MODE=source CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=metamod,css,link-manager
+curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+
+# prebuilt 模式（当前仅支持核心包内置的 de_dust2；地图组件暂无预构建包）
+export CS2_MODE=prebuilt CS2_FEATURES=metamod,css,link-manager
 curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 ```
+
+> ⚠️ **prebuilt 模式地图支持**：`de_dust2` 为核心包内置（默认）；`de_mirage`、`de_inferno` 有预构建包可额外下载。`de_ancient / de_anubis / de_cache / de_nuke / de_overpass / de_train / de_vertigo` 目前**没有预构建包**，prebuilt 模式选中它们会**明确报错退出**（不再静默跳过）；需要这些地图请改用 `CS2_MODE=source`。
 
 > ⚠️ 注意：`curl ... | bash` 时变量要先用 `export` 导出，写在 curl 前面不会传给 bash。
 

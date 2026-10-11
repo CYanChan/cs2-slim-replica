@@ -516,7 +516,7 @@ python cs2slim.py download --platform linux --maps de_dust2,de_mirage --features
 主仓库提供零依赖一键脚本，自动下载工具与 steamclient，并执行 CLI 一键流程。支持两种模式：
 
 - **source（默认）**：下载工具 → 获取配方 → 下载 depot → 提取 → 组装（首次约 1.5GB 下载）
-- **prebuilt**：直接从 GitHub Release 拉取预构建精简包并自动拼装地图/功能组件（核心包约 1.1GB 下载，更快）
+- **prebuilt**：直接从 GitHub Release 拉取预构建精简包并自动拼装地图/功能组件（核心包约 1.1GB 下载，更快）。⚠️ 地图支持：`de_dust2`（内置）、`de_mirage`、`de_inferno` 有预构建包；`de_ancient / de_anubis / de_cache / de_nuke / de_overpass / de_train / de_vertigo` 暂无预构建包，prebuilt 模式选中会**明确报错退出**——需要这些地图请用 `source` 模式
 
 **Linux（curl | bash）**
 

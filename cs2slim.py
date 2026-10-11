@@ -177,8 +177,7 @@ def build_combined_filelist(core_filelist, cfg, registry_base=None):
     for m in resolve_maps(cfg):
         meta = reg_maps.get("maps", {}).get(m)
         if not meta:
-            print(f"  WARN: 未知地图组件 {m}，跳过")
-            continue
+            sys.exit(f"错误: 未知地图组件 {m}，请检查 registry/maps.json（可用: {', '.join(reg_maps.get('maps', {}))}）")
         for path in meta.get("filelist", []):
             if path not in added:
                 lines.append(path)
@@ -189,8 +188,7 @@ def build_combined_filelist(core_filelist, cfg, registry_base=None):
     for feat in parse_csv(cfg.get("features") or []):
         meta = reg_feat.get("features", {}).get(feat)
         if not meta:
-            print(f"  WARN: 未知功能组件 {feat}，跳过")
-            continue
+            sys.exit(f"错误: 未知功能组件 {feat}，请检查 registry/features.json（可用: {', '.join(reg_feat.get('features', {}))}）")
         for path in meta.get("filelist", []):
             if path not in added:
                 lines.append(path)
@@ -745,19 +743,23 @@ def cmd_prebuilt(args, cfg):
                 continue
             meta = reg_maps.get("maps", {}).get(m)
             if meta is None:
-                print(f"  WARN: 未知地图组件 {m}，跳过")
-                continue
+                sys.exit(f"错误: 未知地图组件 {m}，请检查 registry/maps.json")
             url = meta.get("prebuilt_url") or ""
-            print(f"  地图 {m}: {url or '（暂无预构建包）'}")
+            if not url:
+                print(f"  [不可用] 地图 {m}: 无预构建包（prebuilt 模式不可用，请改用 source 模式）")
+            else:
+                print(f"  地图 {m}: {url}")
         reg_feat = load_registry("features.json", cfg.get("registry_base"))
         features = _expand_feature_deps(parse_csv(cfg.get("features") or []), reg_feat)
         for f in features:
             meta = reg_feat.get("features", {}).get(f)
             if meta is None:
-                print(f"  WARN: 未知功能组件 {f}，跳过")
-                continue
+                sys.exit(f"错误: 未知功能组件 {f}，请检查 registry/features.json")
             url = meta.get("prebuilt_url") or ""
-            print(f"  功能 {f}: {url or '（暂无预构建包）'}")
+            if not url:
+                print(f"  [不可用] 功能 {f}: 无预构建包（prebuilt 模式不可用）")
+            else:
+                print(f"  功能 {f}: {url}")
         return
 
     # 1. 核心包
@@ -793,12 +795,14 @@ def cmd_prebuilt(args, cfg):
             continue
         meta = reg_maps.get("maps", {}).get(m)
         if meta is None:
-            print(f"  WARN: 未知地图组件 {m}，跳过")
-            continue
+            sys.exit(f"错误: 未知地图组件 {m}，请检查 registry/maps.json")
         url = meta.get("prebuilt_url") or ""
         if not url:
-            print(f"  WARN: 地图 {m} 暂无预构建包（可用 source 模式: cs2slim.py all），跳过")
-            continue
+            sys.exit(
+                f"错误: 地图 {m} 暂无预构建包，prebuilt 模式无法安装。\n"
+                "当前 prebuilt 模式仅支持核心包内置的 de_dust2。\n"
+                "如需其他地图，请改用 source 模式（CS2_MODE=source）重新执行。"
+            )
         mzip = os.path.join(workdir, f"{m}.zip")
         if not os.path.exists(mzip):
             download_file(url, mzip, f"地图 {m}")
@@ -812,12 +816,10 @@ def cmd_prebuilt(args, cfg):
     for f in features:
         meta = reg_feat.get("features", {}).get(f)
         if meta is None:
-            print(f"  WARN: 未知功能组件 {f}，跳过")
-            continue
+            sys.exit(f"错误: 未知功能组件 {f}，请检查 registry/features.json")
         url = meta.get("prebuilt_url") or ""
         if not url:
-            print(f"  WARN: 功能 {f} 暂无预构建包，跳过")
-            continue
+            sys.exit(f"错误: 功能 {f} 暂无预构建包，prebuilt 模式无法安装（请改用 source 模式）")
         fzip = os.path.join(workdir, f"{f}-pack.zip")
         if not os.path.exists(fzip):
             download_file(url, fzip, f"功能 {f}")
