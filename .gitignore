@@ -3,3 +3,4 @@
 slim.yaml
 cs2-build/
 *.log
+current.json

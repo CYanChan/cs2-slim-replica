@@ -1,0 +1,69 @@
+name: Detect CS2 Update
+
+# 每 4 小时检测一次 CS2 是否更新；检测到变化时：
+#   1. 更新 state/buildid.json
+#   2. 触发 Rebuild Slim Packages 工作流自动重建并发布新 Release
+
+on:
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: cs2-update-detect
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch current buildid
+        run: python3 scripts/updater/get-buildid.py | tee current.json
+
+      - name: Compare with state
+        id: compare
+        run: |
+          if [ ! -f state/buildid.json ]; then
+            echo "first_run=true" >> "$GITHUB_OUTPUT"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "状态文件不存在，仅记录当前 buildid，不触发重建"
+          else
+            OLD=$(python3 -c "import json;print(json.load(open('state/buildid.json'))['buildid'])")
+            NEW=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
+            echo "old=$OLD"
+            echo "new=$NEW"
+            if [ -z "$OLD" ]; then
+              echo "first_run=true" >> "$GITHUB_OUTPUT"
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              echo "状态文件 buildid 为空，仅记录当前 buildid，不触发重建"
+            elif [ "$OLD" != "$NEW" ]; then
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Commit state
+        if: steps.compare.outputs.first_run == 'true' || steps.compare.outputs.changed == 'true'
+        run: |
+          mkdir -p state
+          cp current.json state/buildid.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state/buildid.json
+          git commit -m "chore: CS2 buildid updated to $(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")"
+          git push
+
+      - name: Trigger rebuild
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          BUILDID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
+          echo "检测到 CS2 更新 (buildid=$BUILDID)，触发重建工作流 ..."
+          gh workflow run rebuild-slim.yml --repo "$GITHUB_REPOSITORY" -f buildid="$BUILDID"
+          echo "已触发。可在 Actions 页查看 Rebuild Slim Packages 运行状态。"

@@ -1,0 +1,178 @@
+name: Rebuild Slim Packages
+
+# 检测到 CS2 更新后自动重建（也可手动触发）：
+#   1. create-release: 计算下一个版本号并创建 Release
+#   2. build-linux / build-windows: 并行从 depot 重建 Linux/Windows 核心包并上传
+#   3. finalize: 将新 Release 标记为 Latest
+#
+# 本工作流只操作当前仓库（cs2-slim-replica），使用 GITHUB_TOKEN 即可，
+# 无需额外配置 secret。
+
+on:
+  workflow_dispatch:
+    inputs:
+      buildid:
+        description: '触发重建的 CS2 buildid（可留空，自动读状态文件）'
+        required: false
+        default: ''
+  repository_dispatch:
+    types: [rebuild]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cs2-slim-rebuild
+  cancel-in-progress: false
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve buildid
+        id: buildid
+        run: |
+          BID="${{ github.event.inputs.buildid || github.event.client_payload.buildid || '' }}"
+          if [ -z "$BID" ] && [ -f state/buildid.json ]; then
+            BID=$(python3 -c "import json;print(json.load(open('state/buildid.json'))['buildid'])")
+          fi
+          if [ -z "$BID" ]; then BID="manual"; fi
+          echo "buildid=$BID" >> "$GITHUB_OUTPUT"
+          echo "本次重建 buildid=$BID"
+
+      - name: Compute next version and create release
+        id: version
+        run: |
+          REPO="$GITHUB_REPOSITORY"
+          LAST=$(gh release list --repo "$REPO" --json tagName --jq '.[0].tagName' 2>/dev/null || echo "v1.2.0")
+          BASE=$(echo "$LAST" | sed -n 's/^v\([0-9]*\)\.\([0-9]*\)\.[0-9]*$/\1.\2/p')
+          if [ -z "$BASE" ]; then BASE="1.2"; fi
+          MAJOR=${BASE%%.*}
+          MINOR=${BASE#*.}
+          TAG="v${MAJOR}.$((MINOR+1)).0"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，直接复用"
+          else
+            gh release create "$TAG" --repo "$REPO" \
+              --title "CS2 Slim 精简服务端 ${MAJOR}.$((MINOR+1)).0 (CS2 更新重建 buildid ${{ steps.buildid.outputs.buildid }})" \
+              --notes "检测到 CS2 更新 (buildid ${{ steps.buildid.outputs.buildid }})，自动重建。\n- Linux 核心包: cs2-slim.tar.gz\n- Windows 核心包: cs2-slim-win.zip" \
+              --latest=false
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  build-linux:
+    needs: create-release
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Show disk
+        run: df -h / || true
+
+      - name: Prepare tools
+        run: python scripts/updater/prepare_tools.py --workdir ./cs2-build --platform linux
+
+      - name: Generate config
+        run: |
+          cat > slim-linux.yaml <<'EOF'
+          platform: linux
+          maps: []
+          features: []
+          workdir: ./cs2-build
+          EOF
+
+      - name: Download depots
+        run: python cs2slim.py download --config slim-linux.yaml --depot-tool "$PWD/cs2-build/tools/DepotDownloader"
+
+      - name: Extract loose files
+        run: python cs2slim.py extract --config slim-linux.yaml
+
+      - name: Clean up numbered packs
+        run: python scripts/updater/cleanup_depot.py --workdir ./cs2-build
+
+      - name: Build slim tree
+        run: python cs2slim.py build --config slim-linux.yaml
+
+      - name: Package
+        run: python cs2slim.py package --config slim-linux.yaml --format tar.gz
+
+      - name: Upload release asset
+        env:
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          cp cs2-build/cs2-slim-linux.tar.gz cs2-build/cs2-slim.tar.gz
+          gh release upload "$TAG" cs2-build/cs2-slim.tar.gz --repo "$GITHUB_REPOSITORY" --clobber
+          echo "已上传 cs2-slim.tar.gz 到 $TAG"
+
+      - name: Show final disk
+        run: df -h / || true
+
+  build-windows:
+    needs: create-release
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Show disk
+        run: df -h / || true
+
+      - name: Prepare tools
+        run: python scripts/updater/prepare_tools.py --workdir ./cs2-build --platform win64
+
+      - name: Generate config
+        run: |
+          cat > slim-win.yaml <<'EOF'
+          platform: win64
+          maps: []
+          features: []
+          workdir: ./cs2-build
+          EOF
+
+      - name: Download depots
+        run: python cs2slim.py download --config slim-win.yaml --depot-tool "$PWD/cs2-build/tools/DepotDownloader"
+
+      - name: Extract loose files
+        run: python cs2slim.py extract --config slim-win.yaml
+
+      - name: Clean up numbered packs
+        run: python scripts/updater/cleanup_depot.py --workdir ./cs2-build
+
+      - name: Build slim tree
+        run: python cs2slim.py build --config slim-win.yaml
+
+      - name: Package
+        run: python cs2slim.py package --config slim-win.yaml --format zip
+
+      - name: Upload release asset
+        env:
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          cp cs2-build/cs2-slim-win64.zip cs2-build/cs2-slim-win.zip
+          gh release upload "$TAG" cs2-build/cs2-slim-win.zip --repo "$GITHUB_REPOSITORY" --clobber
+          echo "已上传 cs2-slim-win.zip 到 $TAG"
+
+      - name: Show final disk
+        run: df -h / || true
+
+  finalize:
+    needs: [create-release, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark release as latest
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest
+          echo "Release $TAG 已标记为 Latest，assets:"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'

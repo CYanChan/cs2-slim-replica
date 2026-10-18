@@ -71,6 +71,22 @@ bash ~/start.sh
 
 首次启动会自动链接 `steamclient.so` 到 `~/.steam/sdk64/` 并创建 V8 符号链接；若出现 `Failed to load module '...steamclient.so'`，重跑一键脚本（prebuilt 会自动校验/补下）或参考指南 7.1 节诊断。
 
+## 自动检测 CS2 更新与重建
+
+本仓库内置 GitHub Actions 自动检测与重建工作流（**无需配置任何 secret**）：
+
+- **Detect CS2 Update**：每 4 小时运行一次，用 SteamCMD 获取 CS2 最新 buildid，
+  与 `state/buildid.json` 对比；检测到更新时自动提交状态并触发重建。
+- **Rebuild Slim Packages**：检测到更新后自动执行：
+  1. 在本仓库创建新版本 Release（版本号自动递增，如 v1.3.0）；
+  2. 并行重建 Linux（`cs2-slim.tar.gz`）与 Windows（`cs2-slim-win.zip`）核心包；
+  3. 上传资产并标记为 Latest。
+
+工作流文件：`.github/workflows/detect-cs2-update.yml`、`.github/workflows/rebuild-slim.yml`
+辅助脚本位于 `scripts/updater/`（buildid 解析 / 工具下载 / 磁盘清理）。
+
+首次运行只记录 buildid 不触发重建；之后每次 CS2 更新都会自动发布新版核心包。
+
 ## 相关仓库
 
 | 仓库 | 角色 |
