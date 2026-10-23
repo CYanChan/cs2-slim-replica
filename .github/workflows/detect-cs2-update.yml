@@ -13,6 +13,9 @@ permissions:
   contents: write
   actions: write
 
+env:
+  GH_TOKEN: ${{ github.token }}
+
 concurrency:
   group: cs2-update-detect
   cancel-in-progress: false
