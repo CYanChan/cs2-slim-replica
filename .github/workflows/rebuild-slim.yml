@@ -75,24 +75,31 @@ jobs:
                  --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
                        | sort_by(ltrimstr("v") | split(".") | map(tonumber))
                        | if length == 0 then "" else .[-1] end' 2>/dev/null || echo "")
-          [ -z "$LAST" ] && LAST="v1.2.0"
 
-          BASE=$(echo "$LAST" | sed -n 's/^v\([0-9]*\)\.\([0-9]*\)\.[0-9]*$/\1.\2/p')
-          if [ -z "$BASE" ]; then BASE="1.2"; fi
-          MAJOR=${BASE%%.*}
-          MINOR=${BASE#*.}
-          # MINOR 用 10# 强转十进制，避免 08/09 被当八进制导致 $((MINOR+1)) 报错
-          NEXT="v${MAJOR}.$((10#$MINOR + 1)).0"
+          if [ -z "$LAST" ]; then
+            # 全新仓库尚无任何 Release：从 v1.0.0 起步
+            NEXT="v1.0.0"
+            TITLE_VER="1.0.0"
+            echo "尚无历史 Release，首个版本 $NEXT"
+          else
+            BASE=$(echo "$LAST" | sed -n 's/^v\([0-9]*\)\.\([0-9]*\)\.[0-9]*$/\1.\2/p')
+            if [ -z "$BASE" ]; then BASE="1.0"; fi
+            MAJOR=${BASE%%.*}
+            MINOR=${BASE#*.}
+            # MINOR 用 10# 强转十进制，避免 08/09 被当八进制导致 $((MINOR+1)) 报错
+            TITLE_VER="${MAJOR}.$((10#$MINOR + 1)).0"
+            NEXT="v${TITLE_VER}"
+            echo "上一版 $LAST -> 新版 $NEXT"
+          fi
 
           if gh release view "$NEXT" --repo "$REPO" >/dev/null 2>&1; then
             echo "Release $NEXT 已存在，直接复用"
           else
             gh release create "$NEXT" --repo "$REPO" \
-              --title "CS2 Slim 精简服务端 ${MAJOR}.$((10#$MINOR + 1)).0 (CS2 更新重建 buildid ${BID})" \
-              --notes "检测到 CS2 更新 (buildid ${BID})，自动重建。
+              --title "CS2 Slim 精简服务端 ${TITLE_VER} (CS2 buildid ${BID})" \
+              --notes "由本仓库 CI 从 Steam depot 直连重建（buildid ${BID}）。
 
-          - Linux 核心包: cs2-slim.tar.gz
-          - Windows 核心包: cs2-slim-win.zip" \
+          - Linux 核心包: cs2-slim.tar.gz" \
               --latest=false
           fi
           echo "tag=$NEXT"     >> "$GITHUB_OUTPUT"
