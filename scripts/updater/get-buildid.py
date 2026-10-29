@@ -38,6 +38,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 
 HOME = os.path.expanduser("~")
@@ -64,35 +65,130 @@ def ensure_steamcmd():
     print("::endgroup::", file=sys.stderr, flush=True)
 
 
-def fetch_appinfo():
-    """运行 steamcmd 拉取 CS2 appinfo，返回输出文本。"""
+def fetch_appinfo(retries=3):
+    """运行 steamcmd 拉取 CS2 appinfo，返回输出文本。
+
+    失败重试原因：SteamCMD 首次运行需要自更新，且 app_info_print 常因 CDN
+    抖动/匿名登录未就绪返回空或不完整输出。旧实现只跑一次，一旦空输出整个
+    检测就失败（表现为 Actions 红叉或误判"无更新"）。
+    这里最多重试 retries 次，解析到 buildid 就提前返回。
+    """
     ensure_steamcmd()
-    print("Fetching appinfo for CS2 (730) ...", file=sys.stderr, flush=True)
-    # steamcmd 有时因网络/登录返回非零，但日志仍可解析，因此不 check
-    with open(APPINFO_LOG, "w", encoding="utf-8") as f:
-        subprocess.run(
-            [STEAMCMD, "+login", "anonymous", "+app_info_update", "1",
-             "+app_info_print", "730", "+quit"],
-            stdout=f,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    with open(APPINFO_LOG, encoding="utf-8", errors="replace") as f:
-        return f.read()
+    last = ""
+    for attempt in range(1, retries + 1):
+        print(f"Fetching appinfo for CS2 (730) [第 {attempt}/{retries} 次] ...",
+              file=sys.stderr, flush=True)
+        # steamcmd 有时因网络/登录返回非零，但日志仍可解析，因此不 check
+        with open(APPINFO_LOG, "w", encoding="utf-8") as f:
+            subprocess.run(
+                [STEAMCMD, "+login", "anonymous", "+app_info_update", "1",
+                 "+app_info_print", "730", "+quit"],
+                stdout=f,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        with open(APPINFO_LOG, encoding="utf-8", errors="replace") as f:
+            last = f.read()
+        if parse_buildid(last):
+            return last
+        print(f"第 {attempt} 次未取到 buildid，重试 ...", file=sys.stderr, flush=True)
+        time.sleep(5 * attempt)
+    return last
+
+
+def _find_block(text, key, start=0):
+    """按 Valve KeyValues 语法取出 "key" { ... } 的块内文本。
+
+    用花括号配平扫描，不依赖相邻键名。旧实现假设 branches 块之后紧跟
+    "privatebranches"，一旦 VDF 键序或缩进变化就匹配失败，只能靠兜底正则
+    蒙对，属于随时会静默退化的隐患。
+    正确跳过字符串内的 { } 与转义引号。
+    返回块内文本；找不到返回 None。
+    """
+    if not text:
+        return None
+    pat = re.compile(r'"' + re.escape(key) + r'"')
+    for m in pat.finditer(text, start):
+        i = m.end()
+        while i < len(text) and text[i] in " \t\r\n":
+            i += 1
+        if i >= len(text) or text[i] != "{":
+            # 该 "key" 的值是字符串而非块，继续找下一个同名键
+            continue
+        depth = 0
+        j = i
+        in_str = False
+        while j < len(text):
+            c = text[j]
+            if in_str:
+                if c == "\\":
+                    j += 2
+                    continue
+                if c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[i + 1:j]
+            j += 1
+        return None  # 括号不配平，放弃
+    return None
+
+
+def _get_str(block, key):
+    """取块内 "key" "value" 的 value。"""
+    if not block:
+        return ""
+    m = re.search(r'"' + re.escape(key) + r'"\s*"([^"]*)"', block)
+    return m.group(1) if m else ""
 
 
 def parse_buildid(log):
-    """从 branches -> public 分支提取当前 buildid。"""
-    # 精确匹配 branches 区块
-    m = re.search(r'"branches"\s*\{(?P<b>.*?)\s*\}\s*"privatebranches"', log, re.S)
+    """从 branches -> public 分支提取当前 buildid。
+
+    三级策略，逐级放宽：
+      1) branches 块 -> public 块 -> buildid   （最准，不受键序影响）
+      2) 任意 public 块 -> buildid
+      3) 全文第一个 buildid
+    """
+    branches = _find_block(log, "branches")
+    if branches is not None:
+        pub = _find_block(branches, "public")
+        if pub is not None:
+            bid = _get_str(pub, "buildid")
+            if bid.isdigit():
+                print(f"[buildid] 策略1命中 (branches->public): {bid}",
+                      file=sys.stderr, flush=True)
+                return bid
+
+    # 策略2：全局找 public 块
+    idx = 0
+    while True:
+        pub = _find_block(log, "public", idx)
+        if pub is None:
+            break
+        bid = _get_str(pub, "buildid")
+        if bid.isdigit():
+            print(f"[buildid] 策略2命中 (任意public块): {bid}",
+                  file=sys.stderr, flush=True)
+            return bid
+        pos = log.find('"public"', idx)
+        if pos == -1:
+            break
+        idx = pos + 8
+
+    # 策略3：全文第一个 buildid
+    m = re.search(r'"buildid"\s*"(\d+)"', log)
     if m:
-        pm = re.search(r'"public"\s*\{\s*"buildid"\s*"(\d+)"', m.group("b"))
-        if pm:
-            return pm.group(1)
-    # 兜底：任意位置找 public 分支
-    pm = re.search(r'"public"\s*\{\s*"buildid"\s*"(\d+)"', log)
-    if pm:
-        return pm.group(1)
+        print(f"[buildid] 策略3命中 (全文首个buildid): {m.group(1)}",
+              file=sys.stderr, flush=True)
+        return m.group(1)
+
     return ""
 
 
@@ -108,16 +204,32 @@ def parse_depot_manifests(log):
                 ...
             }
         }
+
+    旧实现用固定 3000 字符窗口切片，depot 块偏大时会漏；这里改为先定位
+    depots 块，再逐个取 depot 子块，最后取 manifests->public->gid。
     """
     depots = {}
+    depots_block = _find_block(log, "depots")
+    scope = depots_block if depots_block is not None else log
+
     for depot in DEPOTS:
-        idx = log.find(f'"{depot}"')
-        if idx == -1:
+        block = _find_block(scope, depot)
+        if block is None:
             depots[depot] = ""
             continue
-        seg = log[idx:idx + 3000]
-        m = re.search(r'"manifests"\s*\{\s*"public"\s*\{\s*"gid"\s*"(\d+)"', seg, re.S)
-        depots[depot] = m.group(1) if m else ""
+        man = _find_block(block, "manifests")
+        if man is None:
+            depots[depot] = ""
+            continue
+        pub = _find_block(man, "public")
+        if pub is None:
+            depots[depot] = ""
+            continue
+        gid = _get_str(pub, "gid")
+        if not gid:
+            m = re.search(r'"gid"\s*"(\d+)"', pub)
+            gid = m.group(1) if m else ""
+        depots[depot] = gid
     return depots
 
 

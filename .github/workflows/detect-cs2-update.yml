@@ -1,12 +1,15 @@
 name: Detect CS2 Update
 
-# 每 4 小时检测一次 CS2 是否更新；检测到变化时：
+# 每 15 分钟检测一次 CS2 是否更新；检测到变化时：
 #   1. 更新 state/buildid.json
 #   2. 触发 Rebuild Slim Packages 工作流自动重建并发布新 Release
+#
+# 注意：GitHub 对 schedule 触发有排队延迟，公开仓库高峰期常见 5~20 分钟漂移，
+# 因此“每 15 分钟”是检测意图，不保证严格 15 分钟落点。workflow_dispatch 可随时手动跑。
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '*/15 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -26,47 +29,129 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # fork 保护：本仓库若不是上游本体，定时轮询默认不开，避免与上游重复
+      # 消耗 Actions 配额。要在本 fork 上真正跑定时，去
+      #   Settings -> Secrets and variables -> Actions -> Variables
+      # 新增 ENABLE_FORK_CRON = true
+      # 手动 workflow_dispatch 始终允许。
+      - name: Fork guard
+        id: guard
+        env:
+          ENABLE_FORK_CRON: ${{ vars.ENABLE_FORK_CRON }}
+        run: |
+          set -euo pipefail
+          ALLOW="true"
+          if [ "${{ github.repository }}" != "cyqmq/cs2-slim-replica" ] \
+             && [ "${{ github.event_name }}" = "schedule" ] \
+             && [ "${ENABLE_FORK_CRON:-false}" != "true" ]; then
+            ALLOW="false"
+            echo "本仓库是 fork 且未设置 ENABLE_FORK_CRON=true，跳过定时检测"
+          fi
+          echo "allow=$ALLOW" >> "$GITHUB_OUTPUT"
+          echo "event=${{ github.event_name }} repo=${{ github.repository }} allow=$ALLOW"
+
       - name: Fetch current buildid
-        run: python3 scripts/updater/get-buildid.py | tee current.json
+        if: steps.guard.outputs.allow == 'true'
+        run: |
+          set -euo pipefail
+          python3 scripts/updater/get-buildid.py | tee current.json
+          # 防御：脚本异常但被 tee 吞掉退出码时，这里兜底校验产物
+          python3 - <<'PY'
+          import json, sys
+          try:
+              d = json.load(open("current.json"))
+          except Exception as e:
+              sys.exit(f"current.json 无效: {e}")
+          if not str(d.get("buildid", "")).isdigit():
+              sys.exit(f"current.json 缺少合法 buildid: {d}")
+          print(f"当前 buildid = {d['buildid']}, depots = {d.get('depots')}")
+          PY
 
       - name: Compare with state
         id: compare
+        if: steps.guard.outputs.allow == 'true'
         run: |
+          set -euo pipefail
+          NEW_BID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
+          NEW_DEPOTS=$(python3 -c "import json;print(json.dumps(json.load(open('current.json')).get('depots',{}),sort_keys=True))")
+
           if [ ! -f state/buildid.json ]; then
             echo "first_run=true" >> "$GITHUB_OUTPUT"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "changed=false"  >> "$GITHUB_OUTPUT"
             echo "状态文件不存在，仅记录当前 buildid，不触发重建"
+            exit 0
+          fi
+
+          OLD_BID=$(python3 -c "import json;print(json.load(open('state/buildid.json')).get('buildid',''))")
+          OLD_DEPOTS=$(python3 -c "import json;print(json.dumps(json.load(open('state/buildid.json')).get('depots',{}),sort_keys=True))")
+
+          echo "old buildid = ${OLD_BID:-<空>}"
+          echo "new buildid = $NEW_BID"
+          echo "old depots  = $OLD_DEPOTS"
+          echo "new depots  = $NEW_DEPOTS"
+
+          if [ -z "$OLD_BID" ]; then
+            echo "first_run=true" >> "$GITHUB_OUTPUT"
+            echo "changed=false"  >> "$GITHUB_OUTPUT"
+            echo "状态文件 buildid 为空，仅记录当前 buildid，不触发重建"
+            exit 0
+          fi
+
+          if [ "$OLD_BID" != "$NEW_BID" ]; then
+            echo "changed=true"   >> "$GITHUB_OUTPUT"
+            echo "reason=buildid" >> "$GITHUB_OUTPUT"
+            echo "检测到 buildid 变化: $OLD_BID -> $NEW_BID"
+          elif [ -n "$NEW_DEPOTS" ] && [ "$NEW_DEPOTS" != "{}" ] && [ "$OLD_DEPOTS" != "$NEW_DEPOTS" ]; then
+            # 兜底：buildid 未变但 depot manifest 变了（热更/回滚），同样需要重建
+            echo "changed=true"  >> "$GITHUB_OUTPUT"
+            echo "reason=depots" >> "$GITHUB_OUTPUT"
+            echo "buildid 未变，但 depot manifest 变化，仍需重建"
           else
-            OLD=$(python3 -c "import json;print(json.load(open('state/buildid.json'))['buildid'])")
-            NEW=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
-            echo "old=$OLD"
-            echo "new=$NEW"
-            if [ -z "$OLD" ]; then
-              echo "first_run=true" >> "$GITHUB_OUTPUT"
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-              echo "状态文件 buildid 为空，仅记录当前 buildid，不触发重建"
-            elif [ "$OLD" != "$NEW" ]; then
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "changed=false" >> "$GITHUB_OUTPUT"
-            fi
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "无变化，跳过"
           fi
 
       - name: Commit state
-        if: steps.compare.outputs.first_run == 'true' || steps.compare.outputs.changed == 'true'
+        if: |
+          steps.guard.outputs.allow == 'true' &&
+          (steps.compare.outputs.first_run == 'true' || steps.compare.outputs.changed == 'true')
         run: |
+          set -euo pipefail
           mkdir -p state
           cp current.json state/buildid.json
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/buildid.json
-          git commit -m "chore: CS2 buildid updated to $(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")"
-          git push
+          if git diff --cached --quiet; then
+            echo "state 无实际改动，跳过提交"
+            exit 0
+          fi
+          BID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
+          git commit -m "chore: CS2 buildid updated to ${BID}"
+          # 重试推送，避免与并发 run 抢 head
+          for i in 1 2 3; do
+            if git push; then echo "push ok"; exit 0; fi
+            echo "push 失败，第 $i 次重试 ..."
+            git pull --rebase --autostash || true
+            sleep 3
+          done
+          echo "::error::连续 3 次 push 失败"
+          exit 1
 
       - name: Trigger rebuild
-        if: steps.compare.outputs.changed == 'true'
+        if: steps.guard.outputs.allow == 'true' && steps.compare.outputs.changed == 'true'
         run: |
-          BUILDID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
-          echo "检测到 CS2 更新 (buildid=$BUILDID)，触发重建工作流 ..."
-          gh workflow run rebuild-slim.yml --repo "$GITHUB_REPOSITORY" -f buildid="$BUILDID"
+          set -euo pipefail
+          BID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
+          echo "检测到 CS2 更新 (buildid=$BID, 原因=${{ steps.compare.outputs.reason }})，触发重建 ..."
+
+          # 已有 rebuild 在跑就不叠加，避免撞车
+          RUNNING=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow rebuild-slim.yml \
+                    --status in_progress --json databaseId --jq 'length' 2>/dev/null || echo 0)
+          if [ "${RUNNING:-0}" -gt 0 ]; then
+            echo "已有 rebuild-slim 在运行中（$RUNNING 个），本次跳过触发"
+            exit 0
+          fi
+
+          gh workflow run rebuild-slim.yml --repo "$GITHUB_REPOSITORY" -f buildid="$BID"
           echo "已触发。可在 Actions 页查看 Rebuild Slim Packages 运行状态。"

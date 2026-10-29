@@ -50,22 +50,53 @@ jobs:
       - name: Compute next version and create release
         id: version
         run: |
+          set -euo pipefail
           REPO="$GITHUB_REPOSITORY"
-          LAST=$(gh release list --repo "$REPO" --json tagName --jq '.[0].tagName' 2>/dev/null || echo "v1.2.0")
+          BID="${{ steps.buildid.outputs.buildid }}"
+
+          # 幂等：同一个 buildid 已有 Release 就复用，避免重复重建把版本号
+          # 一路刷成 v1.5.0/v1.6.0/v1.7.0 而内容完全相同。
+          EXISTING=""
+          if [ -n "$BID" ] && [ "$BID" != "manual" ]; then
+            EXISTING=$(gh release list --repo "$REPO" --limit 100 --json tagName,name \
+                       --jq ".[] | select(.name | test(\"buildid ${BID}\\b\")) | .tagName" \
+                       2>/dev/null | head -n1 || true)
+          fi
+          if [ -n "$EXISTING" ]; then
+            echo "buildid $BID 已有 Release $EXISTING，直接复用（幂等，不重复重建）"
+            echo "tag=$EXISTING"  >> "$GITHUB_OUTPUT"
+            echo "reuse=true"     >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # 版本号取语义版本最大值。旧实现用默认排序（按创建时间）取 .[0]，
+          # 一旦补发过旧版本 Release 就会算错。
+          LAST=$(gh release list --repo "$REPO" --limit 100 --json tagName \
+                 --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))]
+                       | sort_by(ltrimstr("v") | split(".") | map(tonumber))
+                       | if length == 0 then "" else .[-1] end' 2>/dev/null || echo "")
+          [ -z "$LAST" ] && LAST="v1.2.0"
+
           BASE=$(echo "$LAST" | sed -n 's/^v\([0-9]*\)\.\([0-9]*\)\.[0-9]*$/\1.\2/p')
           if [ -z "$BASE" ]; then BASE="1.2"; fi
           MAJOR=${BASE%%.*}
           MINOR=${BASE#*.}
-          TAG="v${MAJOR}.$((MINOR+1)).0"
-          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在，直接复用"
+          # MINOR 用 10# 强转十进制，避免 08/09 被当八进制导致 $((MINOR+1)) 报错
+          NEXT="v${MAJOR}.$((10#$MINOR + 1)).0"
+
+          if gh release view "$NEXT" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $NEXT 已存在，直接复用"
           else
-            gh release create "$TAG" --repo "$REPO" \
-              --title "CS2 Slim 精简服务端 ${MAJOR}.$((MINOR+1)).0 (CS2 更新重建 buildid ${{ steps.buildid.outputs.buildid }})" \
-              --notes "检测到 CS2 更新 (buildid ${{ steps.buildid.outputs.buildid }})，自动重建。\n- Linux 核心包: cs2-slim.tar.gz\n- Windows 核心包: cs2-slim-win.zip" \
+            gh release create "$NEXT" --repo "$REPO" \
+              --title "CS2 Slim 精简服务端 ${MAJOR}.$((10#$MINOR + 1)).0 (CS2 更新重建 buildid ${BID})" \
+              --notes "检测到 CS2 更新 (buildid ${BID})，自动重建。
+
+          - Linux 核心包: cs2-slim.tar.gz
+          - Windows 核心包: cs2-slim-win.zip" \
               --latest=false
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT"     >> "$GITHUB_OUTPUT"
+          echo "reuse=false"   >> "$GITHUB_OUTPUT"
 
   build-linux:
     needs: create-release
@@ -173,9 +204,32 @@ jobs:
     needs: [create-release, build-linux, build-windows]
     runs-on: ubuntu-latest
     steps:
+      - name: Verify assets present
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.create-release.outputs.tag }}"
+          echo "Release $TAG assets:"
+          NAMES=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+          printf '%s\n' "$NAMES"
+
+          # 两个包都必须在，否则不要标 Latest
+          # （防止半成品 Release 被本地 updater 当成最新版拉走）
+          MISSING=0
+          for a in cs2-slim.tar.gz cs2-slim-win.zip; do
+            if ! printf '%s\n' "$NAMES" | grep -qx "$a"; then
+              echo "::error::缺少 asset: $a"
+              MISSING=1
+            fi
+          done
+          if [ "$MISSING" -ne 0 ]; then
+            echo "资产不全，跳过标记 Latest"
+            exit 1
+          fi
+          echo "资产齐全"
+
       - name: Mark release as latest
         run: |
+          set -euo pipefail
           TAG="${{ needs.create-release.outputs.tag }}"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest
-          echo "Release $TAG 已标记为 Latest，assets:"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name'
+          echo "Release $TAG 已标记为 Latest"
