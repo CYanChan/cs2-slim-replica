@@ -3,7 +3,7 @@
 # cs2slim 一键安装脚本 (Linux)
 #
 # 用法:
-#   curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 #
 # 环境变量（可选）:
 #   CS2_MODE       source(默认, 从 depot 构建) | prebuilt(直接拉取 Release 包拼装)
@@ -31,7 +31,7 @@
 #
 # 示例:
 #   export CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=bots
-#   curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 #
 set -euo pipefail
 
@@ -70,7 +70,7 @@ command -v curl  >/dev/null 2>&1 || { echo "错误: 需要 curl"; exit 1; }
 deploy_panel_script() {
   local template="$REPO_DIR/core/deploy/linux/start_panel.sh"
   # 优先从 GitHub 拉取最新模板，避免本地 repo 过时（用户重跑一键脚本时 repo 可能不是最新版）
-  local panel_url="https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/core/deploy/linux/start_panel.sh"
+  local panel_url="https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/core/deploy/linux/start_panel.sh"
   [ -n "${CS2_GH_PROXY:-}" ] && panel_url="${CS2_GH_PROXY%/}/$panel_url"
   if curl -fsSL --retry 3 -m 30 -o "$WORKDIR/start_panel.sh" "$panel_url" 2>/dev/null \
      && [ -s "$WORKDIR/start_panel.sh" ] \
@@ -176,17 +176,17 @@ fi
 # --- 3. 获取主仓库 (带 GitHub 镜像回退) ---
 REPO_DIR="$WORKDIR/repo"
 GIT_URLS=(
-  "https://github.com/cyqmq/cs2-slim-replica.git"
-  "https://ghproxy.com/https://github.com/cyqmq/cs2-slim-replica.git"
-  "https://gitclone.com/github.com/cyqmq/cs2-slim-replica.git"
-  "https://ghfast.top/https://github.com/cyqmq/cs2-slim-replica.git"
+  "https://github.com/CYanChan/cs2-slim-replica.git"
+  "https://ghproxy.com/https://github.com/CYanChan/cs2-slim-replica.git"
+  "https://gitclone.com/github.com/CYanChan/cs2-slim-replica.git"
+  "https://ghfast.top/https://github.com/CYanChan/cs2-slim-replica.git"
 )
 TAR_URLS=(
-  "https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz"
-  "https://ghproxy.com/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz"
-  "https://gh-proxy.com/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz"
-  "https://ghfast.top/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz"
-  "https://github.moeyy.xyz/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz"
+  "https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz"
+  "https://ghproxy.com/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz"
+  "https://gh-proxy.com/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz"
+  "https://ghfast.top/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz"
+  "https://github.moeyy.xyz/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz"
 )
 if [ ! -d "$REPO_DIR/.git" ] && [ ! -f "$REPO_DIR/cs2slim.py" ]; then
   echo "[3/5] 获取主仓库 ..."

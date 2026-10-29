@@ -16,7 +16,7 @@
       "filelist": [
         "game/csgo/maps/de_mirage.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_mirage.zip"
+      "prebuilt_url": ""
     },
     "de_inferno": {
       "required": false,
@@ -24,7 +24,7 @@
       "filelist": [
         "game/csgo/maps/de_inferno.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_inferno.zip"
+      "prebuilt_url": ""
     },
     "de_ancient": {
       "required": false,
@@ -32,7 +32,7 @@
       "filelist": [
         "game/csgo/maps/de_ancient.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_ancient.zip"
+      "prebuilt_url": ""
     },
     "de_anubis": {
       "required": false,
@@ -40,7 +40,7 @@
       "filelist": [
         "game/csgo/maps/de_anubis.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_anubis.zip"
+      "prebuilt_url": ""
     },
     "de_cache": {
       "required": false,
@@ -48,7 +48,7 @@
       "filelist": [
         "game/csgo/maps/de_cache.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_cache.zip"
+      "prebuilt_url": ""
     },
     "de_nuke": {
       "required": false,
@@ -56,7 +56,7 @@
       "filelist": [
         "game/csgo/maps/de_nuke.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_nuke.zip"
+      "prebuilt_url": ""
     },
     "de_overpass": {
       "required": false,
@@ -64,7 +64,7 @@
       "filelist": [
         "game/csgo/maps/de_overpass.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_overpass.zip"
+      "prebuilt_url": ""
     },
     "de_train": {
       "required": false,
@@ -72,7 +72,7 @@
       "filelist": [
         "game/csgo/maps/de_train.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_train.zip"
+      "prebuilt_url": ""
     },
     "de_vertigo": {
       "required": false,
@@ -80,7 +80,7 @@
       "filelist": [
         "game/csgo/maps/de_vertigo.vpk"
       ],
-      "prebuilt_url": "https://github.com/cyqmq/cs2-slim-maps/releases/latest/download/de_vertigo.zip"
+      "prebuilt_url": ""
     }
   }
 }

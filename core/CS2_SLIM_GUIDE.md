@@ -1,6 +1,6 @@
 ﻿# 纯手动复刻 CS2 精简服务端（仅用 DepotDownloader + Source2Viewer-CLI）
 
-> 本指南由 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目收录，作为官方「纯手动复刻」参考；如需自动化构建 / 一键脚本 / 功能组件，见项目 README。
+> 本指南由 [cs2-slim-replica](https://github.com/CYanChan/cs2-slim-replica) 项目收录，作为官方「纯手动复刻」参考；如需自动化构建 / 一键脚本 / 功能组件，见项目 README。
 >
 > 本文不依赖任何现成的精简仓库/脚本，只用两个通用开源工具，从 Steam depot 手动拉取并拼装出一个可运行的 CS2 精简服务端（约 1.7GB，单地图 de_dust2）。
 >

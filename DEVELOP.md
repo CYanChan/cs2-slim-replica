@@ -6,9 +6,7 @@
 
 | 仓库 | 角色 |
 |------|------|
-| [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica)（主仓库） | 核心配方 + 入口脚本 + 组件注册表 |
-| [cs2-slim-maps](https://github.com/cyqmq/cs2-slim-maps) | 地图组件（de_mirage / de_inferno / … 选配） |
-| [cs2-slim-features](https://github.com/cyqmq/cs2-slim-features) | 功能组件（bots 人机等选配） |
+| [cs2-slim-replica](https://github.com/CYanChan/cs2-slim-replica)（主仓库） | 核心配方 + 入口脚本 + 组件注册表 |
 
 ```
 主仓库 (cs2-slim-replica)

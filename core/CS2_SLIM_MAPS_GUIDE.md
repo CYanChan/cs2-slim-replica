@@ -1,6 +1,6 @@
 # CS2 精简服务端 · 地图复刻指南（手动添加竞技地图）
 
-> 本文档属于 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目文档，与 [《纯手动复刻指南》](CS2_SLIM_GUIDE.md)、[《精简树全解析》](CS2_SLIM_TREE_GUIDE.md) 配套阅读。
+> 本文档属于 [cs2-slim-replica](https://github.com/CYanChan/cs2-slim-replica) 项目文档，与 [《纯手动复刻指南》](CS2_SLIM_GUIDE.md)、[《精简树全解析》](CS2_SLIM_TREE_GUIDE.md) 配套阅读。
 >
 > 用 DepotDownloader + Source2Viewer-CLI，手动为精简服务端添加任意竞技地图。不依赖任何现成脚本/仓库。
 > 原理：CS2 地图是独立的 VPK 文件，存放在 Steam depot 2347770 的 `game/csgo/maps/` 下，只需把地图 VPK 和对应 prefabs（天空盒）下载放入精简树即可。
@@ -165,4 +165,3 @@ de_inferno
 | SteamDB CS2 depots（查文件路径/大小） | https://steamdb.info/app/730/depots/ |
 | DepotDownloader | https://github.com/SteamRE/DepotDownloader |
 | Source2Viewer-CLI 文档 | https://s2v.app/ValveResourceFormat/guides/command-line.html |
-| 本仓库地图组件（预构建包/注册表） | https://github.com/cyqmq/cs2-slim-maps |

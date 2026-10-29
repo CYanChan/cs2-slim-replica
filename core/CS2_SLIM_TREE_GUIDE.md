@@ -2,7 +2,7 @@
 
 > 本文档用「结构图 + 工具 + 原理」三步讲清 CS2 精简服务端的目录结构、制作工具与底层机制。内容为通用技术知识，不依赖任何特定精简项目。
 >
-> 属于 [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica) 项目文档；详细手动构建命令见 [《纯手动复刻指南》](CS2_SLIM_GUIDE.md)。
+> 属于 [cs2-slim-replica](https://github.com/CYanChan/cs2-slim-replica) 项目文档；详细手动构建命令见 [《纯手动复刻指南》](CS2_SLIM_GUIDE.md)。
 
 ---
 

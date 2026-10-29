@@ -357,25 +357,25 @@ def ensure_steamclient(tree, workdir):
 CORE_PREBUILT = {
     "linux": {
         "name": "cs2-slim.tar.gz",
-        "url": "https://github.com/cyqmq/cs2-slim-replica/releases/latest/download/cs2-slim.tar.gz",
+        "url": "https://github.com/CYanChan/cs2-slim-replica/releases/latest/download/cs2-slim.tar.gz",
         "tree": "slim",
     },
     "win64": {
         "name": "cs2-slim-win.zip",
-        "url": "https://github.com/cyqmq/cs2-slim-replica/releases/latest/download/cs2-slim-win.zip",
+        "url": "https://github.com/CYanChan/cs2-slim-replica/releases/latest/download/cs2-slim-win.zip",
         "tree": "slim-win",
     },
 }
 
 
 def _update_start_scripts(platform, tree):
-    """用主仓库最新的启动脚本覆盖精简树内的启动脚本（含网络优化参数）。"""
+    """用本仓库最新的启动脚本覆盖精简树内的启动脚本（含网络优化参数）。"""
     try:
         if platform == "linux":
-            url = "https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/core/deploy/linux/start_server.sh"
+            url = "https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/core/deploy/linux/start_server.sh"
             dst = os.path.join(tree, "start_server.sh")
         else:
-            url = "https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/core/deploy/windows/start_server.bat"
+            url = "https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/core/deploy/windows/start_server.bat"
             dst = os.path.join(tree, "start_server.bat")
         url = gh_proxy_url(url)
         tmp = dst + ".new"

@@ -1,7 +1,7 @@
 # cs2slim one-click installer (Windows)
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
+#   irm https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
 #
 # Environment variables (optional, set before running):
 #   $env:CS2_MAPS      comma-separated map list, default de_dust2
@@ -16,7 +16,7 @@
 #
 # Example:
 #   $env:CS2_MAPS = 'de_dust2,de_mirage'; $env:CS2_FEATURES = 'bots'
-#   irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
+#   irm https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
 #
 $ErrorActionPreference = 'Stop'
 
@@ -105,17 +105,17 @@ if ($Mode -eq 'prebuilt') {
 # --- 3. Fetch main repo (with GitHub mirror fallback) ---
 $RepoDir = "$Workdir\repo"
 $GitUrls = @(
-  'https://github.com/cyqmq/cs2-slim-replica.git',
-  'https://ghproxy.com/https://github.com/cyqmq/cs2-slim-replica.git',
-  'https://gitclone.com/github.com/cyqmq/cs2-slim-replica.git',
-  'https://ghfast.top/https://github.com/cyqmq/cs2-slim-replica.git'
+  'https://github.com/CYanChan/cs2-slim-replica.git',
+  'https://ghproxy.com/https://github.com/CYanChan/cs2-slim-replica.git',
+  'https://gitclone.com/github.com/CYanChan/cs2-slim-replica.git',
+  'https://ghfast.top/https://github.com/CYanChan/cs2-slim-replica.git'
 )
 $TarUrls = @(
-  'https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz',
-  'https://ghproxy.com/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz',
-  'https://gh-proxy.com/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz',
-  'https://ghfast.top/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz',
-  'https://github.moeyy.xyz/https://github.com/cyqmq/cs2-slim-replica/archive/refs/heads/main.tar.gz'
+  'https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz',
+  'https://ghproxy.com/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz',
+  'https://gh-proxy.com/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz',
+  'https://ghfast.top/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz',
+  'https://github.moeyy.xyz/https://github.com/CYanChan/cs2-slim-replica/archive/refs/heads/main.tar.gz'
 )
 if (-not (Test-Path "$RepoDir\.git") -and -not (Test-Path "$RepoDir\cs2slim.py")) {
   Write-Host '[3/5] Fetching main repo ...'

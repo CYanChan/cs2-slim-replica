@@ -6,7 +6,7 @@
 
 ## 一键安装
 
-> 💡 不想手写命令？**在线生成一键安装指令**：<https://cyqmq.github.io/cs2-slim-scripts/>（选择地图/功能/模式，自动生成 Linux / Windows 命令）
+> 💡 不想手写命令？**在线生成一键安装指令**：<https://CYanChan.github.io/cs2-slim-scripts/>（选择地图/功能/模式，自动生成 Linux / Windows 命令）
 
 ### Linux (curl | bash)
 
@@ -14,30 +14,30 @@
 
 ```bash
 # 默认: de_dust2 精简服务端（source 模式，首次约 1.5GB 下载）
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 
 # 更快: 预构建模式（直接拉 Release 包拼装，核心包约 1.1GB）
 export CS2_MODE=prebuilt CS2_MAPS=de_dust2,de_mirage CS2_FEATURES=bots
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 
 # 国内网络受限: 加 GitHub 加速代理
 export CS2_GH_PROXY=https://ghproxy.com CS2_MODE=prebuilt
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 
 # 面板模式（简幻欢 / Pterodactyl）: 自动生成 $HOME/start.sh（首次启动会自动安装）
 export CS2_MODE=prebuilt CS2_PANEL=1
-curl -fsSL https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
+curl -fsSL https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.sh | bash
 ```
 
 ### Windows (irm | iex)
 
 ```powershell
 # 默认: de_dust2 精简服务端（source 模式）
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
+irm https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
 
 # 更快: 预构建模式（选配地图 + 人机）
 $env:CS2_MODE='prebuilt'; $env:CS2_MAPS='de_dust2,de_mirage'; $env:CS2_FEATURES='bots'
-irm https://raw.githubusercontent.com/cyqmq/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
+irm https://raw.githubusercontent.com/CYanChan/cs2-slim-replica/main/scripts/get-cs2slim.ps1 | iex
 ```
 
 ### 环境变量
@@ -91,9 +91,7 @@ bash ~/start.sh
 
 | 仓库 | 角色 |
 |------|------|
-| [cs2-slim-replica](https://github.com/cyqmq/cs2-slim-replica)（本仓库） | 主仓库：配方 + 一键脚本 + CLI |
-| [cs2-slim-maps](https://github.com/cyqmq/cs2-slim-maps) | 选配地图（de_mirage / de_inferno / …） |
-| [cs2-slim-features](https://github.com/cyqmq/cs2-slim-features) | 选配功能（bots 人机 / Metamod / CounterStrikeSharp / Swiftly / Plugify / ModSharp 等） |
+| [cs2-slim-replica](https://github.com/CYanChan/cs2-slim-replica)（本仓库） | 主仓库：配方 + 一键脚本 + CLI |
 
 ## 更多文档
 

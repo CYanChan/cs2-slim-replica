@@ -1,8 +1,11 @@
 name: Detect CS2 Update
 
-# 每 15 分钟检测一次 CS2 是否更新；检测到变化时：
+# 每 15 分钟检测一次 CS2 是否更新（数据源：SteamCMD +app_info_print 730，直连 Steam）。
+# 检测到变化时：
 #   1. 更新 state/buildid.json
-#   2. 触发 Rebuild Slim Packages 工作流自动重建并发布新 Release
+#   2. 触发 Rebuild Slim Packages 工作流，从 Steam depot 重建并发布新 Release
+#
+# 本工作流不依赖任何第三方仓库：CS2 版本信息取自 Steam，构建产物发布在本仓库。
 #
 # 注意：GitHub 对 schedule 触发有排队延迟，公开仓库高峰期常见 5~20 分钟漂移，
 # 因此“每 15 分钟”是检测意图，不保证严格 15 分钟落点。workflow_dispatch 可随时手动跑。
@@ -29,29 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # fork 保护：本仓库若不是上游本体，定时轮询默认不开，避免与上游重复
-      # 消耗 Actions 配额。要在本 fork 上真正跑定时，去
-      #   Settings -> Secrets and variables -> Actions -> Variables
-      # 新增 ENABLE_FORK_CRON = true
-      # 手动 workflow_dispatch 始终允许。
-      - name: Fork guard
-        id: guard
-        env:
-          ENABLE_FORK_CRON: ${{ vars.ENABLE_FORK_CRON }}
-        run: |
-          set -euo pipefail
-          ALLOW="true"
-          if [ "${{ github.repository }}" != "cyqmq/cs2-slim-replica" ] \
-             && [ "${{ github.event_name }}" = "schedule" ] \
-             && [ "${ENABLE_FORK_CRON:-false}" != "true" ]; then
-            ALLOW="false"
-            echo "本仓库是 fork 且未设置 ENABLE_FORK_CRON=true，跳过定时检测"
-          fi
-          echo "allow=$ALLOW" >> "$GITHUB_OUTPUT"
-          echo "event=${{ github.event_name }} repo=${{ github.repository }} allow=$ALLOW"
-
       - name: Fetch current buildid
-        if: steps.guard.outputs.allow == 'true'
         run: |
           set -euo pipefail
           python3 scripts/updater/get-buildid.py | tee current.json
@@ -69,7 +50,6 @@ jobs:
 
       - name: Compare with state
         id: compare
-        if: steps.guard.outputs.allow == 'true'
         run: |
           set -euo pipefail
           NEW_BID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")
@@ -113,7 +93,6 @@ jobs:
 
       - name: Commit state
         if: |
-          steps.guard.outputs.allow == 'true' &&
           (steps.compare.outputs.first_run == 'true' || steps.compare.outputs.changed == 'true')
         run: |
           set -euo pipefail
@@ -139,7 +118,7 @@ jobs:
           exit 1
 
       - name: Trigger rebuild
-        if: steps.guard.outputs.allow == 'true' && steps.compare.outputs.changed == 'true'
+        if: steps.compare.outputs.changed == 'true'
         run: |
           set -euo pipefail
           BID=$(python3 -c "import json;print(json.load(open('current.json'))['buildid'])")

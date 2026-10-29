@@ -151,6 +151,7 @@ jobs:
 
   build-windows:
     needs: create-release
+    if: vars.BUILD_WINDOWS == 'true'
     runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 360
     steps:
@@ -201,7 +202,7 @@ jobs:
         run: df -h / || true
 
   finalize:
-    needs: [create-release, build-linux, build-windows]
+    needs: [create-release, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Verify assets present
@@ -212,20 +213,14 @@ jobs:
           NAMES=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           printf '%s\n' "$NAMES"
 
-          # 两个包都必须在，否则不要标 Latest
+          # Linux 包必须在，否则不标 Latest
           # （防止半成品 Release 被本地 updater 当成最新版拉走）
-          MISSING=0
-          for a in cs2-slim.tar.gz cs2-slim-win.zip; do
-            if ! printf '%s\n' "$NAMES" | grep -qx "$a"; then
-              echo "::error::缺少 asset: $a"
-              MISSING=1
-            fi
-          done
-          if [ "$MISSING" -ne 0 ]; then
+          if ! printf '%s\n' "$NAMES" | grep -qx "cs2-slim.tar.gz"; then
+            echo "::error::缺少 asset: cs2-slim.tar.gz"
             echo "资产不全，跳过标记 Latest"
             exit 1
           fi
-          echo "资产齐全"
+          echo "资产齐全（仅 Linux）"
 
       - name: Mark release as latest
         run: |
