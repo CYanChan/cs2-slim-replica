@@ -13,6 +13,19 @@ name: Detect CS2 Update
 on:
   schedule:
     - cron: '*/15 * * * *'
+  # ★ 2026-10-31: 本仓库是 cyqmq/cs2-slim-replica 的 fork，GitHub 对 fork 的
+  #   schedule 触发器默认禁用（实测 API 里 detect 的 workflow_runs 只有 1 条，
+  #   还是手工 workflow_dispatch；cron 一次都没跑过）。
+  #   解决办法：加 push 触发。任何对 main 的推送都会跑一次检测，
+  #   等价于“有人改代码时顺手查一下游戏有没有更新”。
+  #   另外 GitHub 网页上 Actions → Detect CS2 Update → Enable 仍然建议点一下，
+  #   那样 cron 才会真正生效。
+  push:
+    branches: [main]
+    paths:
+      - 'state/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 permissions:
