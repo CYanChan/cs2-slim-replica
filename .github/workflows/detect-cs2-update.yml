@@ -1,5 +1,8 @@
 name: Detect CS2 Update
 
+# 2026-10-31: 本仓库为 fork, 执行 Actions 需在网页上启用一次。
+#   启用后 push 与 schedule 均应生效。
+
 # 每 15 分钟检测一次 CS2 是否更新（数据源：SteamCMD +app_info_print 730，直连 Steam）。
 # 检测到变化时：
 #   1. 更新 state/buildid.json
