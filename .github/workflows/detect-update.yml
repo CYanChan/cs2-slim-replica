@@ -13,16 +13,26 @@ name: Detect Update
 # 注意：GitHub 对 schedule 触发有排队延迟，公开仓库高峰期常见 5~20 分钟漂移，
 # 因此“每 15 分钟”是检测意图，不保证严格 15 分钟落点。workflow_dispatch 可随时手动跑。
 
+# ============================================================================
+# 触发方式(2026-10-31 排障记录, 踩过的坑都在这)
+#
+# 1) schedule: 本仓库是 cyqmq/cs2-slim-replica 的 fork。
+#    GitHub 对 fork 的 schedule 触发器默认禁用，所以 cron 从未运行过
+#    (API 里 workflow_runs total 一直是 1，那唯一一条还是手工 workflow_dispatch)。
+#    必须在网页 Actions 页点一次 "I understand my workflows, go ahead and enable them"。
+#
+# 2) push: 即便启用后，改这个文件的触发器定义也【不会】立刻生效 ——
+#    GitHub 会缓存老工作流的定义。实测: 同一个 commit 里新加的 ping-test.yml
+#    能正常 event=push 跑起来，而本文件加 push: 后连续几次推送都不触发。
+#    解决办法是把文件改名(本文件原名 detect-cs2-update.yml → detect-update.yml)，
+#    让 GitHub 当成全新工作流重新解析，之后 push 立刻生效。
+#    → 以后若再改触发器却不见效，同样手法: 改名或换路径。
+#
+# 3) workflow_dispatch: 随时可在网页手动跑。
+# ============================================================================
 on:
   schedule:
     - cron: '*/15 * * * *'
-  # ★ 2026-10-31: 本仓库是 cyqmq/cs2-slim-replica 的 fork，GitHub 对 fork 的
-  #   schedule 触发器默认禁用（实测 API 里 detect 的 workflow_runs 只有 1 条，
-  #   还是手工 workflow_dispatch；cron 一次都没跑过）。
-  #   解决办法：加 push 触发。任何对 main 的推送都会跑一次检测，
-  #   等价于“有人改代码时顺手查一下游戏有没有更新”。
-  #   另外 GitHub 网页上 Actions → Detect CS2 Update → Enable 仍然建议点一下，
-  #   那样 cron 才会真正生效。
   push:
     branches: [main]
     paths:
