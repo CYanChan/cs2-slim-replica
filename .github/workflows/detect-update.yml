@@ -1,4 +1,4 @@
-name: Detect CS2 Update
+name: Detect Update
 
 # 2026-10-31: 本仓库为 fork, 执行 Actions 需在网页上启用一次。
 #   启用后 push 与 schedule 均应生效。
