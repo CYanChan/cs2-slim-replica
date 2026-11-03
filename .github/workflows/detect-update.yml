@@ -61,9 +61,13 @@ jobs:
       - name: Fetch current buildid
         run: |
           set -euo pipefail
-          # ★ 2026-11-03: 不能直接 `python3 ... | tee current.json` ——
-          #   pipe 会把 python 的退出码换成 tee 的(恒 0), 脚本失败也变 success。
-          #   改为先落文件, 再检查退出码, 失败就让整个 job 红掉。
+          # ★ 2026-11-03 关键修复(两个坑叠加导致 detect 长期空转):
+          #   坑① `python3 ... | tee current.json` —— pipe 会把 python 的退出码
+          #        换成 tee 的(恒 0), 脚本失败也显示 success。
+          #   坑② 兜底校验用普通 heredoc <<'PY' 且内容/结束符都缩进了,
+          #        在 YAML 块标量里结束符带缩进 → heredoc 永不结束, 校验块被
+          #        整体吞掉(或者反过来顶格写会破坏 YAML 结构)。
+          #   解法: 不用 heredoc。直接用 python3 -c 单行脚本, 无缩进歧义。
           if ! python3 scripts/updater/get-buildid.py > current.json; then
             echo "::error::get-buildid.py 执行失败(见上一步输出)"
             cat current.json || true
@@ -72,19 +76,7 @@ jobs:
           echo "--- current.json 原始内容 ---"
           cat current.json
           echo ""
-
-          # 兜底校验: 见下(注意 heredoc 结束符必须顶格, 旧版缩进了 10 空格导致
-          # 整个校验块被当成 heredoc 内容吞掉, 从未执行 —— 这也是漏洞之一)
-          python3 - <<'PY'
-import json, sys
-try:
-    d = json.load(open("current.json"))
-except Exception as e:
-    sys.exit(f"current.json 无效: {e}")
-if not str(d.get("buildid", "")).isdigit():
-    sys.exit(f"current.json 缺少合法 buildid: {d}")
-print(f"当前 buildid = {d['buildid']}, depots = {d.get('depots')}")
-PY
+          python3 -c "import json,sys; d=json.load(open('current.json')); bid=str(d.get('buildid','')); sys.exit('current.json 缺少合法 buildid: %s' % d) if not bid.isdigit() else print('当前 buildid = %s, depots = %s' % (bid, d.get('depots')))"
 
       - name: Compare with state
         id: compare
