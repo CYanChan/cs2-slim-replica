@@ -61,18 +61,30 @@ jobs:
       - name: Fetch current buildid
         run: |
           set -euo pipefail
-          python3 scripts/updater/get-buildid.py | tee current.json
-          # 防御：脚本异常但被 tee 吞掉退出码时，这里兜底校验产物
+          # ★ 2026-11-03: 不能直接 `python3 ... | tee current.json` ——
+          #   pipe 会把 python 的退出码换成 tee 的(恒 0), 脚本失败也变 success。
+          #   改为先落文件, 再检查退出码, 失败就让整个 job 红掉。
+          if ! python3 scripts/updater/get-buildid.py > current.json; then
+            echo "::error::get-buildid.py 执行失败(见上一步输出)"
+            cat current.json || true
+            exit 1
+          fi
+          echo "--- current.json 原始内容 ---"
+          cat current.json
+          echo ""
+
+          # 兜底校验: 见下(注意 heredoc 结束符必须顶格, 旧版缩进了 10 空格导致
+          # 整个校验块被当成 heredoc 内容吞掉, 从未执行 —— 这也是漏洞之一)
           python3 - <<'PY'
-          import json, sys
-          try:
-              d = json.load(open("current.json"))
-          except Exception as e:
-              sys.exit(f"current.json 无效: {e}")
-          if not str(d.get("buildid", "")).isdigit():
-              sys.exit(f"current.json 缺少合法 buildid: {d}")
-          print(f"当前 buildid = {d['buildid']}, depots = {d.get('depots')}")
-          PY
+import json, sys
+try:
+    d = json.load(open("current.json"))
+except Exception as e:
+    sys.exit(f"current.json 无效: {e}")
+if not str(d.get("buildid", "")).isdigit():
+    sys.exit(f"current.json 缺少合法 buildid: {d}")
+print(f"当前 buildid = {d['buildid']}, depots = {d.get('depots')}")
+PY
 
       - name: Compare with state
         id: compare
