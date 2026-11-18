@@ -497,14 +497,36 @@ def cmd_download(args, cfg):
         sys.exit(f"核心 filelist 缺失: {core_shared} 或 {core_binary}")
 
     combined = build_combined_filelist(core_shared, cfg, cfg.get("registry_base"))
+
+    depot_tool = args.depot_tool or cfg.get("depot_tool")
+    if depot_tool and not os.path.exists(depot_tool):
+        sys.exit(f"depot_tool 不存在: {depot_tool}")
+
+    # ==================================================================
+    # ★ 根治 2026-11-18 事故：pak01 编号包不能再写死
+    #
+    # 旧行为: filelist_2347770.txt 硬编码 77 个 pak01_NNN.vpk。
+    #         CS2 每次加地图/资源都会重排归档分配。
+    #         本次更新把 scripts/*.vdata_c / gamemodes.txt /
+    #         workshop_cvar_whitelist.txt 挪进了新分配的
+    #         pak01_541/544/545/546 —— 不在硬编码清单里，于是：
+    #           DepotDownloader 不下 → extract 记 missing_archive 跳过
+    #           → 精简树缺 schema → 引擎解引用 NULL → SIGSEGV
+    #
+    # 新行为: 先只拉 pak01_dir.vpk（3~8MB），解析它的目录树，
+    #         反查出「服务端启动必备文件」实际落在哪些编号包，
+    #         把这些包号并入 filelist。游戏无论怎么重排，清单自动跟随。
+    # ==================================================================
+    if depot_tool:
+        combined = _augment_filelist_with_required_paks(
+            depot_tool, workdir, combined, cfg
+        )
+
     combined_path = os.path.join(workdir, "filelist_2347770_combined.txt")
     with open(combined_path, "w", encoding="utf-8") as f:
         f.write("\n".join(combined) + "\n")
     print(f"组合 filelist: {combined_path} ({len(combined)} 行)")
 
-    depot_tool = args.depot_tool or cfg.get("depot_tool")
-    if depot_tool and not os.path.exists(depot_tool):
-        sys.exit(f"depot_tool 不存在: {depot_tool}")
     jobs = [
         ("2347770", combined_path),
         (binary_depot, core_binary),
@@ -527,6 +549,67 @@ def cmd_download(args, cfg):
                    "-dir", os.path.join(workdir, "depot", depot),
                    "-filelist", filelist]
             print("  " + " ".join(cmd))
+
+
+def _augment_filelist_with_required_paks(depot_tool, workdir, combined, cfg):
+    """拉取 pak01_dir.vpk，反查必备文件所在编号包，并入 filelist 行列表。
+
+    失败时（网络/工具问题）退化为原 filelist + 一份保守的候选包集合，
+    并打印醒目警告，绝不静默放行 —— 静默放行正是这次事故的成因。
+    """
+    pak_required = os.path.join(SCRIPTS_DIR, "updater", "pak_required.py")
+    if not os.path.exists(pak_required):
+        print("[pak] WARN: 缺少 scripts/updater/pak_required.py，跳过动态包发现",
+              file=sys.stderr)
+        return combined
+
+    probe_dir = os.path.join(workdir, "depot_probe")
+    dir_vpk = os.path.join(probe_dir, "game", "csgo", "pak01_dir.vpk")
+
+    if not os.path.exists(dir_vpk):
+        print("[pak] 预取 pak01_dir.vpk（用于反查必备文件所在编号包）...")
+        probe_filelist = os.path.join(workdir, "_probe_dirvpk.txt")
+        with open(probe_filelist, "w", encoding="utf-8") as f:
+            f.write("game/csgo/pak01_dir.vpk\n")
+        os.makedirs(probe_dir, exist_ok=True)
+        cmd = [depot_tool, "-app", "730", "-depot", "2347770",
+               "-dir", probe_dir, "-filelist", probe_filelist]
+        r = subprocess.run(cmd, cwd=workdir)
+        if r.returncode != 0 or not os.path.exists(dir_vpk):
+            print("[pak] ERROR: 预取 pak01_dir.vpk 失败。"
+                  "缺它将无法保证 schema 完整 —— 继续将可能导致启动崩溃。",
+                  file=sys.stderr)
+            return combined
+
+    # 体检：关键 schema 是否都在 dir.vpk 里
+    r = subprocess.run([sys.executable, pak_required, "--dir-vpk", dir_vpk, "--check"],
+                       capture_output=True, text=True)
+    for ln in (r.stderr or "").splitlines():
+        if ln.strip():
+            print("  " + ln)
+    if r.returncode != 0:
+        print("[pak] ERROR: dir.vpk 里缺关键 schema（见上），"
+              "本次构建的产物无法启动。请检查 Steam 侧是否发布完整。", file=sys.stderr)
+        sys.exit(1)
+
+    # 反查编号包
+    r = subprocess.run([sys.executable, pak_required, "--dir-vpk", dir_vpk,
+                        "--format", "filelist", "--prefix", "game/csgo"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print("[pak] ERROR: 反查编号包失败", file=sys.stderr)
+        return combined
+
+    needed = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    added = set(combined)
+    n_add = 0
+    for p in needed:
+        if p not in added:
+            combined.append(p)
+            added.add(p)
+            n_add += 1
+    print(f"[pak] 动态并入 {n_add} 个编号包（必备文件共引用 {len(needed)} 个路径）")
+    return combined
 
 
 def cmd_extract(args, cfg):

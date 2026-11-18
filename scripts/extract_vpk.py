@@ -39,6 +39,7 @@ VPK v2 目录树格式（ValvePak / ValvePython-vpk 确认）：
 """
 
 import argparse
+import fnmatch
 import os
 import struct
 import sys
@@ -189,6 +190,41 @@ def should_exclude(full_path):
     return False
 
 
+# 服务端启动必备文件（缺包会导致引擎 SIGSEGV）。
+# 与 scripts/updater/pak_required.py 的 REQUIRED_PATTERNS 保持一致，
+# 那里负责"下载前反查"，这里负责"提取后兜底校验"。
+REQUIRED_PATTERNS = (
+    "scripts/*.vdata_c",
+    "scripts/*.txt",
+    "scripts/*.kv3",
+    "scripts/**/*.kv3",
+    "resource/*.gameevents",
+    "cfg/*",
+    "gameinfo.gi",
+    "gameinfo_branchspecific.gi",
+    "steam.inf",
+    "gamemodes.txt",
+    "gamemodes_server.txt",
+    "items/*.txt",
+    "misc/*.txt",
+)
+
+
+def is_required_path(full_path):
+    """该路径是否为服务端启动必备文件。"""
+    lp = full_path.lower()
+    for pat in REQUIRED_PATTERNS:
+        p = pat.lower()
+        if "**" in p:
+            prefix = p.split("/**")[0] + "/"
+            suffix = p.rsplit("**", 1)[1].lstrip("/")
+            if lp.startswith(prefix) and fnmatch.fnmatch(lp, "*" + suffix):
+                return True
+        elif fnmatch.fnmatch(lp, p):
+            return True
+    return False
+
+
 # LRU 句柄缓存：限制同时打开的编号包句柄数，避免大量 VPK 包时触及 ulimit -n
 archive_handles = OrderedDict()
 _ARCHIVE_HANDLE_MAX = 32
@@ -246,6 +282,8 @@ def main():
     kept = 0
     excluded = 0
     missing_archive = 0
+    missing_required = []      # ★ 必备文件缺包清单（必须为空，否则启动必崩）
+    required_total = 0
     total_bytes = 0
     ext_counter = Counter()
     embedded_base = info["header_size"] + info["tree_size"]
@@ -255,6 +293,10 @@ def main():
         if should_exclude(full_path):
             excluded += 1
             continue
+
+        is_req = is_required_path(full_path)
+        if is_req:
+            required_total += 1
 
         # 组装文件数据 = preload(内联前缀) + 归档/内联数据
         data_parts = []
@@ -268,13 +310,20 @@ def main():
                 data_parts.append(buf[start : start + e["entry_length"]])
             else:
                 missing_archive += 1
+                if is_req:
+                    missing_required.append((full_path, f"inline越界"))
                 continue
         else:
             archive_data = read_archive_data(
                 e["archive_index"], e["entry_offset"], e["entry_length"], archives_dir
             )
             if archive_data is None:
+                # ★ 缺编号包：以前静默 continue，导致 schema 文件缺失而无人察觉，
+                #   最后表现为引擎启动 SIGSEGV。必须记录下来。
                 missing_archive += 1
+                if is_req:
+                    missing_required.append(
+                        (full_path, f"pak01_{e['archive_index']:03d}.vpk 未下载"))
                 continue
             data_parts.append(archive_data)
 
@@ -301,9 +350,27 @@ def main():
     print(f"保留: {kept} 文件, {total_bytes/1024/1024:.1f} MB")
     print(f"排除: {excluded} 文件")
     print(f"跳过(缺编号包/无数据): {missing_archive}")
+    print(f"必备文件: {required_total} 个, 其中缺包 {len(missing_required)} 个")
     print("扩展名 Top 15:")
     for ext, cnt in ext_counter.most_common(15):
         print(f"  {ext or '(无)'}: {cnt}")
+
+    # ★ 硬失败：必备文件缺包 = 精简树一定起不来。
+    #   以前靠人肉事后比对才发现，现在让 CI 当场红掉。
+    if missing_required:
+        print()
+        print("ERROR: 以下服务端启动必备文件因缺少编号包而未能提取：", file=sys.stderr)
+        for p, why in missing_required[:40]:
+            print(f"  {p}   <- {why}", file=sys.stderr)
+        if len(missing_required) > 40:
+            print(f"  ... 共 {len(missing_required)} 个", file=sys.stderr)
+        print()
+        print("这些文件缺失会导致引擎初始化时解引用空指针并 SIGSEGV。", file=sys.stderr)
+        print("请确认 filelist 已包含所需 pak01 编号包"
+              "（cs2slim.py 应已自动反查并入；若仍缺失请检查 Steam 侧更新）。",
+              file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
